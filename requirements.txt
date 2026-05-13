@@ -1,0 +1,7 @@
+fastapi>=0.95.0
+uvicorn[standard]>=0.18.0
+websockets>=11.0
+
+# Notes:
+# - We use FastAPI + Uvicorn for the control API and WebSocket server.
+# - The `websockets` package is used by the simple async drone simulator.

@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  backend:
+    image: python:3.11-slim
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: bash -lc "pip install -r requirements.txt && uvicorn backend.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+  sim:
+    image: python:3.11-slim
+    depends_on:
+      - backend
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: bash -lc "pip install -r requirements.txt && python drone_sim.py --id sim1"
