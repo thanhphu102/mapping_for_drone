@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
-from typing import Dict, List
+from typing import Any, Dict, List
 
 app = FastAPI()
 
@@ -86,6 +86,113 @@ async def post_command(cmd: dict):
                     pass
     await broadcast_to_frontends({"type": "command_sent", "target": target, "to": sent})
     return {"ok": True, "sent": sent}
+
+
+@app.post("/debug/osm-selection")
+async def debug_osm_selection(payload: dict):
+    selected_type = payload.get("type")
+    selected_id = payload.get("id")
+    full = payload.get("full")
+
+    print("\n===== OSM SELECTION =====")
+    print(f"Type: {selected_type}")
+    print(f"ID: {selected_id}")
+
+    if not isinstance(full, dict):
+        print("Raw payload summary: full payload is not a JSON object")
+        print("=========================\n")
+        return {"ok": True}
+
+    elements = full.get("elements")
+    if not isinstance(elements, list):
+        print("Raw payload summary: no elements array")
+        print(f"Top-level keys: {list(full.keys())}")
+        print("=========================\n")
+        return {"ok": True}
+
+    matching_element: Dict[str, Any] | None = None
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        if element.get("type") == selected_type and element.get("id") == selected_id:
+            matching_element = element
+            break
+
+    if matching_element:
+        tags = matching_element.get("tags")
+        if isinstance(tags, dict) and tags:
+            print("\nTags:")
+            for key in sorted(tags.keys()):
+                value = tags.get(key)
+                print(f"{key} = {value}")
+        else:
+            print("\nTags: <none>")
+    else:
+        print("\nMatched selected element: <not found in full payload>")
+
+    node_elements = [
+        element for element in elements
+        if isinstance(element, dict) and element.get("type") == "node"
+    ]
+    way_elements = [
+        element for element in elements
+        if isinstance(element, dict) and element.get("type") == "way"
+    ]
+    relation_elements = [
+        element for element in elements
+        if isinstance(element, dict) and element.get("type") == "relation"
+    ]
+
+    if selected_type == "way":
+        print("\nNodes:")
+        if node_elements:
+            for index, node in enumerate(node_elements, start=1):
+                node_id = node.get("id")
+                node_lat = node.get("lat")
+                node_lon = node.get("lon")
+                print(f"{index}. node {node_id} lat={node_lat} lon={node_lon}")
+        else:
+            print("<none>")
+
+    if selected_type == "relation":
+        print("\nRelation members:")
+        members = matching_element.get("members") if matching_element else None
+        if isinstance(members, list) and members:
+            for index, member in enumerate(members, start=1):
+                if not isinstance(member, dict):
+                    continue
+                member_type = member.get("type")
+                member_ref = member.get("ref")
+                member_role = member.get("role")
+                print(f"{index}. {member_type} {member_ref} role={member_role}")
+        else:
+            print("<none>")
+
+        print("\nIncluded ways:")
+        if way_elements:
+            for index, way in enumerate(way_elements, start=1):
+                way_id = way.get("id")
+                way_nodes = way.get("nodes")
+                node_count = len(way_nodes) if isinstance(way_nodes, list) else 0
+                print(f"{index}. way {way_id} nodes={node_count}")
+        else:
+            print("<none>")
+
+        print("\nIncluded nodes:")
+        if node_elements:
+            for index, node in enumerate(node_elements, start=1):
+                node_id = node.get("id")
+                node_lat = node.get("lat")
+                node_lon = node.get("lon")
+                print(f"{index}. node {node_id} lat={node_lat} lon={node_lon}")
+        else:
+            print("<none>")
+
+    print("\nRaw payload summary:")
+    print(f"elements_total={len(elements)}")
+    print(f"nodes={len(node_elements)} ways={len(way_elements)} relations={len(relation_elements)}")
+    print("=========================\n")
+    return {"ok": True}
 
 # Mount static files AFTER all routes are defined
 frontend_dist_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

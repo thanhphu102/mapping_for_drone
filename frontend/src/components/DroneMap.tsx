@@ -25,16 +25,12 @@ interface DroneMapProps {
   selectedTarget: CommandTarget | null
   connectedCount: number
   commandStatus: CommandDispatchStatus
-  candidates: OsmCandidate[]
-  selectedCandidate: OsmCandidate | null
   highlightedCandidate: OsmCandidate | null
   isFetchingCandidates: boolean
   isFetchingFull: boolean
-  locationFetchMessage: { tone: 'success' | 'error'; text: string } | null
+  locationFetchMessage: { tone: 'success' | 'error' | 'info'; text: string } | null
   onTargetSelect: (target: MapTargetDraft) => void
   onFetchLocation: () => void
-  onCandidateHover: (candidate: OsmCandidate | null) => void
-  onCandidateSelect: (candidate: OsmCandidate) => void
   onCancelTarget: () => void
   onConfirmTarget: () => void
 }
@@ -189,16 +185,12 @@ export function DroneMap({
   selectedTarget,
   connectedCount,
   commandStatus,
-  candidates,
-  selectedCandidate,
   highlightedCandidate,
   isFetchingCandidates,
   isFetchingFull,
   locationFetchMessage,
   onTargetSelect,
   onFetchLocation,
-  onCandidateHover,
-  onCandidateSelect,
   onCancelTarget,
   onConfirmTarget,
 }: DroneMapProps) {
@@ -297,10 +289,6 @@ export function DroneMap({
           point={targetPoint}
           connectedCount={connectedCount}
           status={commandStatus}
-          candidates={candidates}
-          selectedCandidate={selectedCandidate}
-          onCandidateHover={onCandidateHover}
-          onCandidateSelect={onCandidateSelect}
           onFetchLocation={onFetchLocation}
           isFetchingCandidates={isFetchingCandidates}
           isFetchingFull={isFetchingFull}
