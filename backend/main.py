@@ -88,5 +88,13 @@ async def post_command(cmd: dict):
     return {"ok": True, "sent": sent}
 
 # Mount static files AFTER all routes are defined
-frontend_path = os.path.join(os.path.dirname(__file__), "..", "frontend")
-app.mount("/", StaticFiles(directory=frontend_path, html=True), name="static")
+frontend_dist_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+
+# Verify dist directory exists
+if not os.path.exists(frontend_dist_path):
+    raise RuntimeError(
+        f"Frontend dist directory not found at {frontend_dist_path}.\n"
+        "Please run: cd frontend && npm run build"
+    )
+
+app.mount("/", StaticFiles(directory=frontend_dist_path, html=True), name="static")
