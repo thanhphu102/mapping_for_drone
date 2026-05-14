@@ -62,15 +62,78 @@
             attribution: '&copy; OpenStreetMap contributors'
           }
         },
-        layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+        layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-fade-duration': 0 } }]
       },
       center: [0, 0],
-      zoom: 2
+      zoom: 2,
+      fadeDuration: 0
     });
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
     const droneState = {}; // { drone_id: { lat, lon, alt, battery, status } }
     let markers = {};
+    let tableUpdatePending = false;
+    let markerRefreshPending = false;
+
+    function isInCurrentView(lat, lon) {
+      const bounds = map.getBounds();
+      if (!bounds) return true;
+      return bounds.contains([lon, lat]);
+    }
+
+    function upsertMarkerIfVisible(id) {
+      const state = droneState[id];
+      if (!state || state.status !== 'connected' || state.lat === undefined || state.lon === undefined) {
+        if (markers[id]) {
+          markers[id].remove();
+          delete markers[id];
+        }
+        return;
+      }
+
+      if (!isInCurrentView(state.lat, state.lon)) {
+        if (markers[id]) {
+          markers[id].remove();
+          delete markers[id];
+        }
+        return;
+      }
+
+      if (!markers[id]) {
+        markers[id] = new maplibregl.Marker()
+          .setLngLat([state.lon, state.lat])
+          .setPopup(new maplibregl.Popup({ offset: 12 }).setText(id))
+          .addTo(map);
+      } else {
+        markers[id].setLngLat([state.lon, state.lat]);
+      }
+    }
+
+    function refreshVisibleMarkers() {
+      Object.keys(droneState).forEach((id) => upsertMarkerIfVisible(id));
+    }
+
+    function scheduleTableUpdate() {
+      if (tableUpdatePending) return;
+      tableUpdatePending = true;
+      requestAnimationFrame(() => {
+        tableUpdatePending = false;
+        updateDroneTable();
+      });
+    }
+
+    function scheduleMarkerRefresh() {
+      if (markerRefreshPending) return;
+      markerRefreshPending = true;
+      requestAnimationFrame(() => {
+        markerRefreshPending = false;
+        refreshVisibleMarkers();
+      });
+    }
+
+    map.on('moveend', scheduleMarkerRefresh);
+    map.on('zoomend', scheduleMarkerRefresh);
+    map.on('load', scheduleMarkerRefresh);
     
     // Connect to backend WebSocket
     const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/frontend');
@@ -93,18 +156,9 @@
           droneState[id].lat = lat;
           droneState[id].lon = lon;
           droneState[id].battery = battery;
-          
-          // Update map marker
-          if (!markers[id]) {
-            markers[id] = new maplibregl.Marker()
-              .setLngLat([lon, lat])
-              .setPopup(new maplibregl.Popup({ offset: 12 }).setText(id))
-              .addTo(map);
-          } else {
-            markers[id].setLngLat([lon, lat]);
-          }
-          
-          updateDroneTable();
+
+          upsertMarkerIfVisible(id);
+          scheduleTableUpdate();
           
         } else if (msg.type === 'connect') {
           const id = msg.drone_id;
@@ -113,7 +167,8 @@
           }
           droneState[id].status = 'connected';
           console.log('✅ drone connected:', id);
-          updateDroneTable();
+          scheduleTableUpdate();
+          scheduleMarkerRefresh();
           
         } else if (msg.type === 'disconnect') {
           const id = msg.drone_id;
@@ -125,7 +180,7 @@
             delete markers[id];
           }
           console.log('❌ drone disconnected:', id);
-          updateDroneTable();
+          scheduleTableUpdate();
           
         } else if (msg.type === 'command_sent') {
           console.log('📤 command sent to:', msg.to);
@@ -146,10 +201,12 @@
     // Update the drone table
     function updateDroneTable() {
       const tbody = document.getElementById('drones-tbody');
-      const drones = Object.entries(droneState).sort((a, b) => a[0].localeCompare(b[0]));
+      const drones = Object.entries(droneState)
+        .filter(([, state]) => state.status === 'connected')
+        .sort((a, b) => a[0].localeCompare(b[0]));
       
       if (drones.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">Waiting for drones...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">No connected drones</td></tr>';
         return;
       }
       

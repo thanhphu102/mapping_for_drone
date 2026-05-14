@@ -2,6 +2,12 @@
 
 Interactive map frontend for Ground Station Computer (GSC) to control drone swarms. Click on the map to set target coordinates, and all connected drones will fly to that point.
 
+## Maintainer Documentation
+
+For architecture, internal references, and feature-development guides, see:
+
+- `docs/README.md`
+
 ## Quickstart
 
 **One command to start everything:**
