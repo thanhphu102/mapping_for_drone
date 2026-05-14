@@ -65,6 +65,9 @@ export function useDroneTelemetry() {
   const dirtyIdsRef = useRef<Set<string>>(new Set())
   const animationFrameRef = useRef<number | null>(null)
   const versionRef = useRef(0)
+  const socketRef = useRef<WebSocket | null>(null)
+  const reconnectTimerRef = useRef<number | null>(null)
+  const reconnectAttemptRef = useRef(0)
 
   const flushSnapshot = useCallback(() => {
     animationFrameRef.current = null
@@ -99,92 +102,137 @@ export function useDroneTelemetry() {
 
   useEffect(() => {
     let active = true
-    const socket = createFrontendWebSocket()
-
-    socket.onopen = () => {
-      if (!active) {
-        return
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
       }
-
-      setConnectionStatus('open')
-      setConnectionMessage('Telemetry stream connected')
     }
 
-    socket.onerror = () => {
-      if (!active) {
+    const scheduleReconnect = () => {
+      if (!active || reconnectTimerRef.current !== null) {
         return
       }
 
-      setConnectionStatus('error')
-      setConnectionMessage('Telemetry stream error')
+      const attempt = reconnectAttemptRef.current
+      const delay = Math.min(1000 * 2 ** attempt, 10000)
+      reconnectAttemptRef.current += 1
+
+      setConnectionStatus('connecting')
+      setConnectionMessage(`Reconnecting telemetry stream in ${Math.ceil(delay / 1000)}s`)
+
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null
+        connect()
+      }, delay)
     }
 
-    socket.onclose = () => {
+    const connect = () => {
       if (!active) {
         return
       }
 
-      setConnectionStatus((current) => (current === 'error' ? current : 'closed'))
-      setConnectionMessage('Telemetry stream closed')
-    }
+      clearReconnectTimer()
+      setConnectionStatus('connecting')
+      setConnectionMessage('Connecting to telemetry stream')
 
-    socket.onmessage = (event) => {
-      if (!active) {
-        return
-      }
+      const socket = createFrontendWebSocket()
+      socketRef.current = socket
 
-      try {
-        const message = JSON.parse(event.data as string) as FrontendEvent
-
-        if (message.type === 'telemetry') {
-          updateTelemetryState(
-            dronesRef.current,
-            message.drone_id,
-            asPayload(message.payload),
-          )
-          scheduleSnapshot(message.drone_id)
+      socket.onopen = () => {
+        if (!active) {
           return
         }
 
-        if (message.type === 'connect') {
-          const current = dronesRef.current[message.drone_id]
-          dronesRef.current[message.drone_id] = {
-            ...current,
-            id: message.drone_id,
-            status: 'connected',
+        reconnectAttemptRef.current = 0
+        setConnectionStatus('open')
+        setConnectionMessage('Telemetry stream connected')
+      }
+
+      socket.onerror = () => {
+        if (!active) {
+          return
+        }
+
+        setConnectionStatus('error')
+        setConnectionMessage('Telemetry stream error')
+      }
+
+      socket.onclose = () => {
+        if (!active) {
+          return
+        }
+
+        setConnectionStatus((current) => (current === 'error' ? current : 'closed'))
+        setConnectionMessage('Telemetry stream closed')
+        scheduleReconnect()
+      }
+
+      socket.onmessage = (event) => {
+        if (!active) {
+          return
+        }
+
+        try {
+          const message = JSON.parse(event.data as string) as FrontendEvent
+
+          if (message.type === 'telemetry') {
+            updateTelemetryState(
+              dronesRef.current,
+              message.drone_id,
+              asPayload(message.payload),
+            )
+            scheduleSnapshot(message.drone_id)
+            return
           }
-          scheduleSnapshot(message.drone_id)
-          return
-        }
 
-        if (message.type === 'disconnect') {
-          const current = dronesRef.current[message.drone_id]
-          if (current) {
+          if (message.type === 'connect') {
+            const current = dronesRef.current[message.drone_id]
             dronesRef.current[message.drone_id] = {
               ...current,
-              status: 'disconnected',
+              id: message.drone_id,
+              status: 'connected',
             }
+            scheduleSnapshot(message.drone_id)
+            return
           }
-          scheduleSnapshot(message.drone_id)
-          return
-        }
 
-        if (message.type === 'command_sent') {
-          console.info('Command sent to:', message.to ?? [])
+          if (message.type === 'disconnect') {
+            const current = dronesRef.current[message.drone_id]
+            if (current) {
+              dronesRef.current[message.drone_id] = {
+                ...current,
+                status: 'disconnected',
+              }
+            }
+            scheduleSnapshot(message.drone_id)
+            return
+          }
+
+          if (message.type === 'command_sent') {
+            console.info('Command sent to:', message.to ?? [])
+          }
+        } catch (error) {
+          console.error('WebSocket parse error:', error)
+          setConnectionMessage('Telemetry message parse error')
         }
-      } catch (error) {
-        console.error('WebSocket parse error:', error)
-        setConnectionMessage('Telemetry message parse error')
       }
     }
+
+    connect()
 
     return () => {
       active = false
-      socket.onopen = null
-      socket.onclose = null
-      socket.onerror = null
-      socket.onmessage = null
-      socket.close()
+      clearReconnectTimer()
+
+      if (socketRef.current) {
+        socketRef.current.onopen = null
+        socketRef.current.onclose = null
+        socketRef.current.onerror = null
+        socketRef.current.onmessage = null
+        socketRef.current.close()
+        socketRef.current = null
+      }
 
       if (animationFrameRef.current !== null) {
         window.cancelAnimationFrame(animationFrameRef.current)

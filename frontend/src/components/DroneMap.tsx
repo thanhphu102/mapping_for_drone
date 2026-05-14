@@ -40,7 +40,7 @@ export function DroneMap({
   })
 
   return (
-    <div className="relative h-full min-h-[420px] overflow-hidden bg-slate-900 lg:min-h-0">
+    <div className="drone-map relative h-full min-h-[420px] overflow-hidden bg-slate-900 lg:min-h-0">
       <div ref={containerRef} className="absolute inset-0" aria-label="Drone map" />
       <div className="pointer-events-none absolute left-4 top-4 z-10 rounded-lg border border-white/20 bg-slate-950/80 px-3 py-2 text-sm text-white shadow-lg backdrop-blur">
         Click map to set target for connected drones

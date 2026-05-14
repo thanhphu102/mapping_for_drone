@@ -80,7 +80,7 @@ function App() {
   }, [commandDispatch, selectedTarget])
 
   return (
-    <div className="h-dvh bg-slate-100 text-slate-950">
+    <div className="min-h-screen h-dvh bg-slate-100 text-slate-950">
       <div className="flex h-full flex-col lg:flex-row">
         <main className="min-h-0 flex-1">
           <DroneMap
