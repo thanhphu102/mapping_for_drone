@@ -6,14 +6,63 @@ import { Notice, type NoticeState } from './components/Notice'
 import { StatusStrip } from './components/StatusStrip'
 import { useCommandDispatch } from './hooks/useCommandDispatch'
 import { useDroneTelemetry } from './hooks/useDroneTelemetry'
-import type { CommandTarget, DroneState, MapTargetDraft } from './types/drone'
+import { fetchNearbyOsmCandidates, fetchOsmElementFull } from './services/osm'
+import type {
+  CommandTarget,
+  DroneState,
+  MapTargetDraft,
+  OsmCandidate,
+} from './types/drone'
 import { formatDroneList } from './utils/format'
+
+type LocationFetchStatus =
+  | 'idle'
+  | 'loading_candidates'
+  | 'loading_full'
+  | 'success'
+  | 'error'
+
+interface LocationFetchState {
+  status: LocationFetchStatus
+  candidates: OsmCandidate[]
+  selectedCandidate: OsmCandidate | null
+  highlightedCandidate: OsmCandidate | null
+  message: {
+    tone: 'success' | 'error'
+    text: string
+  } | null
+}
+
+const initialLocationFetchState: LocationFetchState = {
+  status: 'idle',
+  candidates: [],
+  selectedCandidate: null,
+  highlightedCandidate: null,
+  message: null,
+}
+
+function canHighlightCandidate(candidate: OsmCandidate): boolean {
+  const directGeometryCount = candidate.geometry.geometry?.length ?? 0
+  if (candidate.type === 'way') {
+    return directGeometryCount >= 2
+  }
+
+  const memberGeometryCount =
+    candidate.geometry.members?.filter(
+      (member) => member.type === 'way' && (member.geometry?.length ?? 0) >= 2,
+    ).length ?? 0
+
+  return memberGeometryCount > 0 || directGeometryCount >= 2
+}
 
 function App() {
   const { snapshot, connectionStatus, connectionMessage } = useDroneTelemetry()
   const commandDispatch = useCommandDispatch()
   const [selectedTarget, setSelectedTarget] = useState<CommandTarget | null>(null)
   const [notice, setNotice] = useState<NoticeState | null>(null)
+  const [locationFetch, setLocationFetch] = useState<LocationFetchState>(
+    initialLocationFetchState,
+  )
 
   const connectedDrones = useMemo<DroneState[]>(() => {
     return Object.values(snapshot.dronesById)
@@ -48,6 +97,7 @@ function App() {
       }
 
       commandDispatch.reset()
+      setLocationFetch(initialLocationFetchState)
       setSelectedTarget({
         lat: Number(target.lat.toFixed(6)),
         lon: Number(target.lon.toFixed(6)),
@@ -68,6 +118,7 @@ function App() {
         title: 'Command sent',
         detail: `Command sent to: ${formatDroneList(response.sent)}`,
       })
+      setLocationFetch(initialLocationFetchState)
       setSelectedTarget(null)
     } catch (error) {
       setNotice({
@@ -79,6 +130,115 @@ function App() {
     }
   }, [commandDispatch, selectedTarget])
 
+  const handleCancelTarget = useCallback(() => {
+    setLocationFetch(initialLocationFetchState)
+    setSelectedTarget(null)
+  }, [])
+
+  const handleFetchLocation = useCallback(async () => {
+    if (!selectedTarget) {
+      return
+    }
+
+    setLocationFetch((current) => ({
+      ...current,
+      status: 'loading_candidates',
+      candidates: [],
+      selectedCandidate: null,
+      highlightedCandidate: null,
+      message: null,
+    }))
+
+    try {
+      const candidates = await fetchNearbyOsmCandidates(
+        selectedTarget.lat,
+        selectedTarget.lon,
+      )
+
+      if (candidates.length === 0) {
+        setLocationFetch((current) => ({
+          ...current,
+          status: 'error',
+          message: {
+            tone: 'error',
+            text: 'No OSM element found near this coordinate',
+          },
+        }))
+        return
+      }
+
+      setLocationFetch((current) => ({
+        ...current,
+        status: 'idle',
+        candidates,
+        message: null,
+      }))
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to fetch nearby OSM elements'
+
+      setLocationFetch((current) => ({
+        ...current,
+        status: 'error',
+        message: {
+          tone: 'error',
+          text: message,
+        },
+      }))
+    }
+  }, [selectedTarget])
+
+  const handleCandidateHover = useCallback((candidate: OsmCandidate | null) => {
+    setLocationFetch((current) => ({
+      ...current,
+      highlightedCandidate:
+        candidate && canHighlightCandidate(candidate) ? candidate : null,
+    }))
+  }, [])
+
+  const handleCandidateSelect = useCallback(async (candidate: OsmCandidate) => {
+    const canHighlight = canHighlightCandidate(candidate)
+
+    setLocationFetch((current) => ({
+      ...current,
+      status: 'loading_full',
+      selectedCandidate: candidate,
+      highlightedCandidate: canHighlight ? candidate : null,
+      message: null,
+    }))
+
+    try {
+      const fullData = await fetchOsmElementFull(candidate.type, candidate.id)
+      console.log('OSM element type:', candidate.type)
+      console.log('OSM element id:', candidate.id)
+      console.log('OSM full JSON:', fullData)
+
+      setLocationFetch((current) => ({
+        ...current,
+        status: 'success',
+        message: {
+          tone: 'success',
+          text: canHighlight
+            ? `Selected/Fetched OSM ${candidate.type} ${candidate.id}`
+            : `Selected/Fetched OSM ${candidate.type} ${candidate.id} (geometry highlight unavailable)`,
+        },
+      }))
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'OSM API request failed'
+      setLocationFetch((current) => ({
+        ...current,
+        status: 'error',
+        message: {
+          tone: 'error',
+          text: message,
+        },
+      }))
+    }
+  }, [])
+
   return (
     <div className="min-h-screen h-dvh bg-slate-100 text-slate-950">
       <div className="flex h-full flex-col lg:flex-row">
@@ -89,8 +249,17 @@ function App() {
             selectedTarget={selectedTarget}
             connectedCount={connectedCount}
             commandStatus={commandDispatch.state.status}
+            candidates={locationFetch.candidates}
+            selectedCandidate={locationFetch.selectedCandidate}
+            highlightedCandidate={locationFetch.highlightedCandidate}
+            isFetchingCandidates={locationFetch.status === 'loading_candidates'}
+            isFetchingFull={locationFetch.status === 'loading_full'}
+            locationFetchMessage={locationFetch.message}
             onTargetSelect={handleTargetSelect}
-            onCancelTarget={() => setSelectedTarget(null)}
+            onFetchLocation={handleFetchLocation}
+            onCandidateHover={handleCandidateHover}
+            onCandidateSelect={handleCandidateSelect}
+            onCancelTarget={handleCancelTarget}
             onConfirmTarget={handleConfirmTarget}
           />
         </main>
