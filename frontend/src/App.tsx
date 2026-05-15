@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, MapPinned } from 'lucide-react'
 import { DroneMap } from './components/DroneMap'
 import { OsmEnclosingPanel } from './components/OsmEnclosingPanel'
+import { SpatialEditor } from './components/SpatialEditor'
 import { DroneTable } from './components/DroneTable'
 import { Notice, type NoticeState } from './components/Notice'
 import { StatusStrip } from './components/StatusStrip'
@@ -11,11 +12,17 @@ import {
   fetchEnclosingOsmElements,
   fetchOsmElementFull,
 } from './services/osm'
+import {
+  createDrawingProjectFromOsm,
+  fetchOsmElementGeometry,
+} from './services/spatial'
 import type {
   CommandTarget,
+  EditorMode,
   DroneState,
   MapTargetDraft,
   OsmCandidate,
+  OsmElementGeometryResponse,
 } from './types/drone'
 import { formatDroneList } from './utils/format'
 
@@ -33,6 +40,7 @@ interface LocationFetchState {
   candidates: OsmCandidate[]
   selectedCandidate: OsmCandidate | null
   highlightedCandidate: OsmCandidate | null
+  selectedGeometry: OsmElementGeometryResponse | null
   message: {
     tone: 'success' | 'error' | 'info'
     text: string
@@ -44,6 +52,7 @@ const initialLocationFetchState: LocationFetchState = {
   candidates: [],
   selectedCandidate: null,
   highlightedCandidate: null,
+  selectedGeometry: null,
   message: null,
 }
 
@@ -72,6 +81,24 @@ function App() {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('droneControl')
   const [locationSelectionMessage, setLocationSelectionMessage] =
     useState<string | null>(null)
+  const [isOpeningEditor, setIsOpeningEditor] = useState(false)
+  const [editorModeOverride, setEditorModeOverride] = useState<EditorMode | null>(null)
+  const [confirmedLargeArea, setConfirmedLargeArea] = useState(false)
+  const [currentPath, setCurrentPath] = useState(window.location.pathname)
+  const spatialEditorMatch = currentPath.match(/^\/spatial-editor\/([^/]+)$/)
+
+  const navigateTo = useCallback((path: string) => {
+    window.history.pushState(null, '', path)
+    setCurrentPath(path)
+  }, [])
+
+  useEffect(() => {
+    const handleRouteChange = () => {
+      setCurrentPath(window.location.pathname)
+    }
+    window.addEventListener('popstate', handleRouteChange)
+    return () => window.removeEventListener('popstate', handleRouteChange)
+  }, [])
 
   const connectedDrones = useMemo<DroneState[]>(() => {
     return Object.values(snapshot.dronesById)
@@ -96,25 +123,18 @@ function App() {
 
   const handleTargetSelect = useCallback(
     (target: MapTargetDraft) => {
-      if (connectedCount === 0) {
-        setNotice({
-          tone: 'error',
-          title: 'No drones connected',
-          detail: 'Start or reconnect a drone before sending a target.',
-        })
-        return
-      }
-
       commandDispatch.reset()
       setLocationFetch(initialLocationFetchState)
       setSidebarMode('droneControl')
       setLocationSelectionMessage(null)
+      setEditorModeOverride(null)
+      setConfirmedLargeArea(false)
       setSelectedTarget({
         lat: Number(target.lat.toFixed(6)),
         lon: Number(target.lon.toFixed(6)),
       })
     },
-    [commandDispatch, connectedCount],
+    [commandDispatch],
   )
 
   const handleConfirmTarget = useCallback(async () => {
@@ -157,12 +177,15 @@ function App() {
 
     setSidebarMode('osmEnclosing')
     setLocationSelectionMessage(null)
+    setEditorModeOverride(null)
+    setConfirmedLargeArea(false)
     setLocationFetch((current) => ({
       ...current,
       status: 'loading_candidates',
       candidates: [],
       selectedCandidate: null,
       highlightedCandidate: null,
+      selectedGeometry: null,
       message: {
         tone: 'info',
         text: 'Fetching enclosing OSM elements...',
@@ -229,14 +252,18 @@ function App() {
       status: 'loading_full',
       selectedCandidate: candidate,
       highlightedCandidate: canHighlight ? candidate : null,
+      selectedGeometry: null,
       message: {
         tone: 'info',
-        text: `Fetching ${candidate.type} ${candidate.id}...`,
+        text: `Building ${candidate.type} ${candidate.id} boundary...`,
       },
     }))
 
     try {
-      const fullData = await fetchOsmElementFull(candidate.type, candidate.id)
+      const [fullData, selectedGeometry] = await Promise.all([
+        fetchOsmElementFull(candidate.type, candidate.id),
+        fetchOsmElementGeometry(candidate.type, candidate.id),
+      ])
       console.log('OSM element type:', candidate.type)
       console.log('OSM element id:', candidate.id)
       console.log('OSM full JSON:', fullData)
@@ -266,14 +293,15 @@ function App() {
       setLocationFetch((current) => ({
         ...current,
         status: 'success',
+        selectedGeometry,
+        highlightedCandidate: canHighlight ? candidate : null,
         message: {
           tone: 'success',
-          text: `Selected/Fetched OSM ${candidate.type} ${candidate.id}`,
+          text: `Selected ${candidate.type} ${candidate.id}. Boundary preview is ready.`,
         },
       }))
-      setLocationSelectionMessage('Location selected successfully')
-      setLocationFetch(initialLocationFetchState)
-      setSidebarMode('droneControl')
+      setEditorModeOverride(selectedGeometry.editorMode)
+      setConfirmedLargeArea(false)
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'OSM API request failed'
@@ -288,10 +316,70 @@ function App() {
     }
   }, [])
 
+  const handleOpenSpatialEditor = useCallback(async () => {
+    const candidate = locationFetch.selectedCandidate
+    if (!candidate) {
+      return
+    }
+
+    setIsOpeningEditor(true)
+    setLocationFetch((current) => ({
+      ...current,
+      message: {
+        tone: 'info',
+        text: 'Creating drawing project...',
+      },
+    }))
+
+    try {
+      const response = await createDrawingProjectFromOsm(
+        candidate.type,
+        candidate.id,
+        {
+          editorModeOverride: editorModeOverride ?? undefined,
+          confirmedLargeArea,
+        },
+      )
+      navigateTo(`/spatial-editor/${response.projectId}`)
+    } catch (error) {
+      const requiresConfirmation =
+        typeof error === 'object' &&
+        error !== null &&
+        'requiresConfirmation' in error &&
+        Boolean((error as { requiresConfirmation?: unknown }).requiresConfirmation)
+      if (requiresConfirmation) {
+        setConfirmedLargeArea(true)
+      }
+      setLocationFetch((current) => ({
+        ...current,
+        message: {
+          tone: requiresConfirmation ? 'info' : 'error',
+          text:
+            error instanceof Error
+              ? error.message
+              : 'Unable to create drawing project',
+        },
+      }))
+    } finally {
+      setIsOpeningEditor(false)
+    }
+  }, [confirmedLargeArea, editorModeOverride, locationFetch.selectedCandidate, navigateTo])
+
   const handleCloseOsmPanel = useCallback(() => {
     setLocationFetch(initialLocationFetchState)
     setSidebarMode('droneControl')
+    setEditorModeOverride(null)
+    setConfirmedLargeArea(false)
   }, [])
+
+  if (spatialEditorMatch) {
+    return (
+      <SpatialEditor
+        projectId={spatialEditorMatch[1]}
+        onBack={() => navigateTo('/')}
+      />
+    )
+  }
 
   return (
     <div className="min-h-screen h-dvh bg-slate-100 text-slate-950">
@@ -304,6 +392,7 @@ function App() {
             connectedCount={connectedCount}
             commandStatus={commandDispatch.state.status}
             highlightedCandidate={locationFetch.highlightedCandidate}
+            selectedBoundaryGeometry={locationFetch.selectedGeometry?.geometry ?? null}
             isFetchingCandidates={locationFetch.status === 'loading_candidates'}
             isFetchingFull={locationFetch.status === 'loading_full'}
             locationFetchMessage={locationFetch.message}
@@ -321,9 +410,15 @@ function App() {
               candidates={locationFetch.candidates}
               selectedCandidate={locationFetch.selectedCandidate}
               highlightedCandidate={locationFetch.highlightedCandidate}
+              selectedGeometry={locationFetch.selectedGeometry}
+              selectedEditorMode={editorModeOverride}
               status={locationFetch.message}
+              isOpeningEditor={isOpeningEditor}
+              confirmedLargeArea={confirmedLargeArea}
               onHoverCandidate={handleCandidateHover}
               onSelectCandidate={handleCandidateSelect}
+              onChangeEditorMode={setEditorModeOverride}
+              onOpenSpatialEditor={handleOpenSpatialEditor}
               onClose={handleCloseOsmPanel}
             />
           ) : (

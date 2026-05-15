@@ -64,12 +64,19 @@ export function TargetCommandPopover({
         type="button"
         className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-sky-300"
         onClick={onConfirm}
-        disabled={status === 'sending' || isFetchingCandidates || isFetchingFull}
+        disabled={
+          connectedCount === 0 ||
+          status === 'sending' ||
+          isFetchingCandidates ||
+          isFetchingFull
+        }
       >
         <Send className="size-4" aria-hidden="true" />
-        {status === 'sending'
-          ? 'Sending command'
-          : `Send to ${connectedCount} drone(s)`}
+        {connectedCount === 0
+          ? 'No drones connected'
+          : status === 'sending'
+            ? 'Sending command'
+            : `Send to ${connectedCount} drone(s)`}
       </button>
 
       <button

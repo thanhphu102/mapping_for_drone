@@ -141,3 +141,36 @@ button {
     transform: scale(1.8);
   }
 }
+
+/* Floor selector — Google Indoor Maps style */
+.floor-selector {
+  transition: opacity 0.2s ease;
+}
+
+.floor-selector-btn {
+  border-bottom: 1px solid rgb(226 232 240 / 0.5);
+}
+
+.floor-selector-btn:last-child {
+  border-bottom: none;
+}
+
+.floor-indicator {
+  transition: transform 0.15s ease;
+}
+
+/* Building entry overlay */
+.building-entry-overlay {
+  animation: slide-up 0.25s ease-out;
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}

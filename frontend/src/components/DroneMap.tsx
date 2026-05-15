@@ -1,12 +1,15 @@
 import { useEffect } from 'react'
 import type { Feature, FeatureCollection, Geometry, Position } from 'geojson'
 import type { GeoJSONSource } from 'maplibre-gl'
+import type { Map } from 'maplibre-gl'
 import { useDroneMap } from '../hooks/useDroneMap'
 import { useDroneMarkers } from '../hooks/useDroneMarkers'
 import { useProjectedTarget } from '../hooks/useProjectedTarget'
+import { fetchMapOverlays } from '../services/spatial'
 import type {
   CommandDispatchStatus,
   CommandTarget,
+  DrawingProject,
   DroneRegistry,
   MapTargetDraft,
   OsmCandidate,
@@ -18,6 +21,50 @@ import { TargetCommandPopover } from './TargetCommandPopover'
 const highlightSourceId = 'osm-highlight-source'
 const highlightFillLayerId = 'osm-highlight-fill-layer'
 const highlightLineLayerId = 'osm-highlight-line-layer'
+const overlayBoundarySourceId = 'published-overlay-boundary-source'
+const overlayFeatureSourceId = 'published-overlay-feature-source'
+const boundaryMinZoom = 13
+
+function mapStyleReady(map: Map) {
+  return Boolean((map as { style?: unknown }).style)
+}
+
+function getSourceSafe(map: Map, sourceId: string): GeoJSONSource | null {
+  if (!mapStyleReady(map)) {
+    return null
+  }
+  try {
+    return (map.getSource(sourceId) as GeoJSONSource | undefined) ?? null
+  } catch {
+    return null
+  }
+}
+
+function removeLayerSafe(map: Map, layerId: string) {
+  if (!mapStyleReady(map)) {
+    return
+  }
+  try {
+    if (map.getLayer(layerId)) {
+      map.removeLayer(layerId)
+    }
+  } catch {
+    // MapLibre may clear style during route unmount; cleanup should stay quiet.
+  }
+}
+
+function removeSourceSafe(map: Map, sourceId: string) {
+  if (!mapStyleReady(map)) {
+    return
+  }
+  try {
+    if (map.getSource(sourceId)) {
+      map.removeSource(sourceId)
+    }
+  } catch {
+    // MapLibre may clear style during route unmount; cleanup should stay quiet.
+  }
+}
 
 interface DroneMapProps {
   dronesById: DroneRegistry
@@ -26,6 +73,7 @@ interface DroneMapProps {
   connectedCount: number
   commandStatus: CommandDispatchStatus
   highlightedCandidate: OsmCandidate | null
+  selectedBoundaryGeometry: Geometry | null
   isFetchingCandidates: boolean
   isFetchingFull: boolean
   locationFetchMessage: { tone: 'success' | 'error' | 'info'; text: string } | null
@@ -179,6 +227,43 @@ function candidateToFeatureCollection(
   }
 }
 
+function projectsToBoundaryCollection(
+  projects: DrawingProject[],
+): FeatureCollection<Geometry> {
+  return {
+    type: 'FeatureCollection',
+    features: projects.map((project) => ({
+      type: 'Feature',
+      id: project.id,
+      geometry: project.baseGeometry,
+      properties: {
+        projectId: project.id,
+        name: project.name,
+        editorMode: project.editorMode,
+      },
+    })),
+  }
+}
+
+function projectsToFeatureCollection(
+  projects: DrawingProject[],
+): FeatureCollection<Geometry> {
+  return {
+    type: 'FeatureCollection',
+    features: projects.flatMap((project) =>
+      project.features.map((feature) => ({
+        ...feature,
+        properties: {
+          ...(feature.properties ?? {}),
+          projectId: project.id,
+          projectName: project.name,
+          editorMode: project.editorMode,
+        },
+      })),
+    ) as Feature<Geometry>[],
+  }
+}
+
 export function DroneMap({
   dronesById,
   dirtyIds,
@@ -186,6 +271,7 @@ export function DroneMap({
   connectedCount,
   commandStatus,
   highlightedCandidate,
+  selectedBoundaryGeometry,
   isFetchingCandidates,
   isFetchingFull,
   locationFetchMessage,
@@ -209,6 +295,9 @@ export function DroneMap({
     }
 
     const ensureHighlightLayers = () => {
+      if (!mapStyleReady(map)) {
+        return
+      }
       if (!map.getSource(highlightSourceId)) {
         map.addSource(highlightSourceId, {
           type: 'geojson',
@@ -256,26 +345,218 @@ export function DroneMap({
 
     return () => {
       map.off('load', onLoad)
-      if (map.getLayer(highlightLineLayerId)) {
-        map.removeLayer(highlightLineLayerId)
+      removeLayerSafe(map, highlightLineLayerId)
+      removeLayerSafe(map, highlightFillLayerId)
+      removeSourceSafe(map, highlightSourceId)
+    }
+  }, [map])
+
+  useEffect(() => {
+    if (!map) {
+      return
+    }
+
+    let disposed = false
+    let refreshTimer: number | undefined
+
+    const emptyCollection: FeatureCollection<Geometry> = {
+      type: 'FeatureCollection',
+      features: [],
+    }
+
+    const ensureOverlayLayers = () => {
+      if (!mapStyleReady(map)) {
+        return
       }
-      if (map.getLayer(highlightFillLayerId)) {
-        map.removeLayer(highlightFillLayerId)
+      if (!map.getSource(overlayBoundarySourceId)) {
+        map.addSource(overlayBoundarySourceId, {
+          type: 'geojson',
+          data: emptyCollection,
+        })
       }
-      if (map.getSource(highlightSourceId)) {
-        map.removeSource(highlightSourceId)
+      if (!map.getSource(overlayFeatureSourceId)) {
+        map.addSource(overlayFeatureSourceId, {
+          type: 'geojson',
+          data: emptyCollection,
+        })
+      }
+      if (!map.getLayer('published-overlay-boundary-fill')) {
+        map.addLayer({
+          id: 'published-overlay-boundary-fill',
+          type: 'fill',
+          source: overlayBoundarySourceId,
+          paint: {
+            'fill-color': '#94a3b8',
+            'fill-opacity': 0.08,
+          },
+        })
+      }
+      if (!map.getLayer('published-overlay-boundary-line')) {
+        map.addLayer({
+          id: 'published-overlay-boundary-line',
+          type: 'line',
+          source: overlayBoundarySourceId,
+          paint: {
+            'line-color': '#64748b',
+            'line-width': 2,
+          },
+        })
+      }
+      if (!map.getLayer('published-overlay-feature-fill')) {
+        map.addLayer({
+          id: 'published-overlay-feature-fill',
+          type: 'fill',
+          source: overlayFeatureSourceId,
+          filter: ['==', ['geometry-type'], 'Polygon'],
+          paint: {
+            'fill-color': '#22c55e',
+            'fill-opacity': 0.24,
+          },
+        })
+      }
+      if (!map.getLayer('published-overlay-feature-line')) {
+        map.addLayer({
+          id: 'published-overlay-feature-line',
+          type: 'line',
+          source: overlayFeatureSourceId,
+          paint: {
+            'line-color': '#15803d',
+            'line-width': 3,
+          },
+        })
+      }
+      if (!map.getLayer('published-overlay-feature-point')) {
+        map.addLayer({
+          id: 'published-overlay-feature-point',
+          type: 'circle',
+          source: overlayFeatureSourceId,
+          filter: ['==', ['geometry-type'], 'Point'],
+          paint: {
+            'circle-color': '#15803d',
+            'circle-radius': 5,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 1.5,
+          },
+        })
+      }
+    }
+
+    const setOverlayData = (projects: DrawingProject[]) => {
+      const zoom = map.getZoom()
+      const boundarySource = getSourceSafe(map, overlayBoundarySourceId)
+      const featureSource = getSourceSafe(map, overlayFeatureSourceId)
+      const visibleBoundaryProjects = projects.filter(
+        (project) => zoom >= project.boundaryMinZoom,
+      )
+      const visibleFeatureProjects = projects.filter(
+        (project) => zoom >= project.detailMinZoom,
+      )
+
+      boundarySource?.setData(
+        visibleBoundaryProjects.length > 0
+          ? projectsToBoundaryCollection(visibleBoundaryProjects)
+          : emptyCollection,
+      )
+      featureSource?.setData(
+        visibleFeatureProjects.length > 0
+          ? projectsToFeatureCollection(visibleFeatureProjects)
+          : emptyCollection,
+      )
+    }
+
+    const refreshOverlays = async () => {
+      if (disposed || !getSourceSafe(map, overlayBoundarySourceId)) {
+        return
+      }
+      const zoom = map.getZoom()
+      if (zoom < boundaryMinZoom) {
+        setOverlayData([])
+        return
+      }
+      const bounds = map.getBounds()
+      try {
+        const response = await fetchMapOverlays([
+          bounds.getWest(),
+          bounds.getSouth(),
+          bounds.getEast(),
+          bounds.getNorth(),
+        ])
+        if (!disposed) {
+          setOverlayData(response.projects)
+        }
+      } catch (error) {
+        console.warn('Published overlay fetch failed:', error)
+      }
+    }
+
+    const scheduleRefresh = () => {
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer)
+      }
+      refreshTimer = window.setTimeout(refreshOverlays, 120)
+    }
+
+    const onLoad = () => {
+      ensureOverlayLayers()
+      scheduleRefresh()
+    }
+
+    if (map.isStyleLoaded()) {
+      onLoad()
+    } else {
+      map.once('load', onLoad)
+    }
+    map.on('moveend', scheduleRefresh)
+    map.on('zoomend', scheduleRefresh)
+
+    return () => {
+      disposed = true
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer)
+      }
+      map.off('load', onLoad)
+      map.off('moveend', scheduleRefresh)
+      map.off('zoomend', scheduleRefresh)
+      for (const layerId of [
+        'published-overlay-feature-point',
+        'published-overlay-feature-line',
+        'published-overlay-feature-fill',
+        'published-overlay-boundary-line',
+        'published-overlay-boundary-fill',
+      ]) {
+        removeLayerSafe(map, layerId)
+      }
+      for (const sourceId of [overlayFeatureSourceId, overlayBoundarySourceId]) {
+        removeSourceSafe(map, sourceId)
       }
     }
   }, [map])
 
   useEffect(() => {
-    if (!map || !map.getSource(highlightSourceId)) {
+    if (!map) {
       return
     }
 
-    const source = map.getSource(highlightSourceId) as GeoJSONSource
+    const source = getSourceSafe(map, highlightSourceId)
+    if (!source) {
+      return
+    }
+    if (selectedBoundaryGeometry) {
+      source.setData({
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            geometry: selectedBoundaryGeometry,
+            properties: {},
+          },
+        ],
+      })
+      return
+    }
+
     source.setData(candidateToFeatureCollection(highlightedCandidate))
-  }, [highlightedCandidate, map])
+  }, [highlightedCandidate, selectedBoundaryGeometry, map])
 
   return (
     <div className="drone-map relative h-full min-h-[420px] overflow-hidden bg-slate-900 lg:min-h-0">

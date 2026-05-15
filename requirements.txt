@@ -1,7 +1,9 @@
 fastapi>=0.95.0
 uvicorn[standard]>=0.18.0
 websockets>=11.0
+psycopg[binary]>=3.1.18
 
 # Notes:
 # - We use FastAPI + Uvicorn for the control API and WebSocket server.
 # - The `websockets` package is used by the simple async drone simulator.
+# - `psycopg[binary]` is used when DATABASE_URL enables PostgreSQL/PostGIS storage.
