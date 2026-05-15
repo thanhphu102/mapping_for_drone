@@ -84,7 +84,7 @@ interface UseMapRendererOptions {
   project: DrawingProject | null
   projectConfig: ProjectCanvasConfig
   visibleFeatures: Feature[]
-  draftFeature: Feature | null
+  draftCollection: GeoJSON.FeatureCollection | null
   snapPreview: SnapPreview | null
   isMounted: () => boolean
   onBoundaryRendered: () => void
@@ -99,7 +99,7 @@ export function useMapRenderer({
   project,
   projectConfig,
   visibleFeatures,
-  draftFeature,
+  draftCollection,
   snapPreview,
   isMounted,
   onBoundaryRendered,
@@ -119,16 +119,16 @@ export function useMapRenderer({
     const baseCollection = featureCollection([baseFeature])
     const dimCollection = featureCollection([dimMaskFeature(project)])
     const projectFeatureCollection = featureCollection(visibleFeatures)
-    const draftCollection = featureCollection(draftFeature ? [draftFeature] : [])
+    const draftCollectionFeature = draftCollection ?? { type: 'FeatureCollection', features: [] }
     const snapCollection = featureCollection(
       snapPreview
         ? [
-            {
-              type: 'Feature',
-              geometry: { type: 'Point', coordinates: snapPreview.point },
-              properties: { kind: snapPreview.kind },
-            } as Feature,
-          ]
+          {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: snapPreview.point },
+            properties: { kind: snapPreview.kind },
+          } as Feature,
+        ]
         : [],
     )
 
@@ -152,9 +152,9 @@ export function useMapRenderer({
     }
 
     if (!getSourceSafe(map, draftSourceId)) {
-      map.addSource(draftSourceId, { type: 'geojson', data: draftCollection })
+      map.addSource(draftSourceId, { type: 'geojson', data: draftCollectionFeature })
     } else {
-      getSourceSafe(map, draftSourceId)?.setData(draftCollection)
+      getSourceSafe(map, draftSourceId)?.setData(draftCollectionFeature)
     }
 
     if (!getSourceSafe(map, snapPreviewSourceId)) {
@@ -243,11 +243,22 @@ export function useMapRenderer({
       })
     }
 
+    if (!map.getLayer('draft-feature-fill')) {
+      map.addLayer({
+        id: 'draft-feature-fill',
+        type: 'fill',
+        source: draftSourceId,
+        filter: ['==', ['geometry-type'], 'Polygon'],
+        paint: { 'fill-color': '#f97316', 'fill-opacity': 0.15 },
+      })
+    }
+
     if (!map.getLayer(draftLineLayerId)) {
       map.addLayer({
         id: draftLineLayerId,
         type: 'line',
         source: draftSourceId,
+        filter: ['==', ['geometry-type'], 'LineString'],
         paint: { 'line-color': '#f97316', 'line-width': 3, 'line-dasharray': [2, 1] },
       })
     }
@@ -257,10 +268,26 @@ export function useMapRenderer({
         id: draftPointLayerId,
         type: 'circle',
         source: draftSourceId,
+        filter: ['==', ['geometry-type'], 'Point'],
         paint: {
           'circle-color': '#f97316',
           'circle-radius': 5,
           'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
+        },
+      })
+    }
+
+    if (!map.getLayer('draft-feature-vertex')) {
+      map.addLayer({
+        id: 'draft-feature-vertex',
+        type: 'circle',
+        source: draftSourceId,
+        filter: ['==', ['geometry-type'], 'MultiPoint'],
+        paint: {
+          'circle-color': '#ffffff',
+          'circle-radius': 4,
+          'circle-stroke-color': '#f97316',
           'circle-stroke-width': 2,
         },
       })
@@ -289,7 +316,7 @@ export function useMapRenderer({
         onMessage('Base boundary rendered')
       }
     })
-  }, [draftFeature, mapReady, mapLoaded, project, projectConfig.precisionZoom, snapPreview, visibleFeatures, map, isMounted, onBoundaryRendered, onMessage])
+  }, [draftCollection, mapReady, mapLoaded, project, projectConfig.precisionZoom, snapPreview, visibleFeatures, map, isMounted, onBoundaryRendered, onMessage])
 
   // --- Precision mode: fade raster tiles at deep zoom ---
   useEffect(() => {

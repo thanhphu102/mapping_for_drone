@@ -18,7 +18,6 @@ const rasterOsmStyle: StyleSpecification = {
         'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
       ],
       tileSize: 256,
-      maxzoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
     },
   },
@@ -119,7 +118,7 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
     // result in a 0px height. We only set inline styles when computed height is 0.
     try {
       let el: HTMLElement | null = containerRef.current
-      const stack: Array<{tag: string; h: number}> = []
+      const stack: Array<{ tag: string; h: number }> = []
       while (el && el !== document.body && el !== document.documentElement) {
         const rect = el.getBoundingClientRect()
         stack.push({ tag: el.tagName.toLowerCase(), h: Math.round(rect.height) })

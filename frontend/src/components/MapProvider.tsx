@@ -21,7 +21,6 @@ const editorStyle: maplibregl.StyleSpecification = {
       type: 'raster',
       tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
       tileSize: 256,
-      maxzoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
     },
   },
@@ -53,7 +52,7 @@ const MapContext = createContext<MapContextValue>({
   mapReady: false,
   mapLoaded: false,
   mapZoom: 0,
-  containerRef: () => {},
+  containerRef: () => { },
 })
 
 interface MapProviderProps {
@@ -88,7 +87,6 @@ export function MapProvider({ children }: MapProviderProps) {
         style: editorStyle,
         center: [106.70098, 10.77689],
         zoom: 14,
-        maxZoom: 21,
         fadeDuration: 0,
         preserveDrawingBuffer: false,
       })

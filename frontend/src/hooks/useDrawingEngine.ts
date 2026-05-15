@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import type { Feature, Position } from 'geojson'
+import type { Feature, FeatureCollection, Position } from 'geojson'
 import type { Map } from 'maplibre-gl'
 import type { DrawingProject, SpatialLayer } from '../types/drone'
 import type { SnapPreview } from './useSnapEngine'
@@ -9,7 +9,6 @@ export type DrawMode =
   | 'point'
   | 'line'
   | 'polygon'
-  // Indoor tools
   | 'room'
   | 'wall'
   | 'door'
@@ -48,7 +47,9 @@ interface UseDrawingEngineOptions {
   isMounted: () => boolean
   modeRef: React.RefObject<DrawMode>
   snapPreviewRef: React.RefObject<SnapPreview | null>
+  draftPointsRef: React.RefObject<Position[]>
   onAddPoint: (updater: (current: Position[]) => Position[]) => void
+  onSaveDraft: () => void
   onMessage: (msg: string) => void
 }
 
@@ -59,11 +60,14 @@ export function useDrawingEngine({
   isMounted,
   modeRef,
   snapPreviewRef,
+  draftPointsRef,
   onAddPoint,
+  onSaveDraft,
   onMessage,
 }: UseDrawingEngineOptions) {
   const projectRef = useRef(project)
   const toolsEnabledRef = useRef(toolsEnabled)
+  const onSaveDraftRef = useRef(onSaveDraft)
 
   useEffect(() => {
     projectRef.current = project
@@ -73,11 +77,22 @@ export function useDrawingEngine({
     toolsEnabledRef.current = toolsEnabled
   }, [toolsEnabled])
 
+  useEffect(() => {
+    onSaveDraftRef.current = onSaveDraft
+  }, [onSaveDraft])
+
   const handleMapClick = useCallback(
-    (event: { lngLat: { lng: number; lat: number } }) => {
-      if (!toolsEnabledRef.current) {
+    (event: any) => {
+      if (!toolsEnabledRef.current || !map) {
         return
       }
+
+      // Do not add a point if we clicked on an existing vertex
+      const features = map.queryRenderedFeatures(event.point, { layers: ['draft-feature-vertex'] })
+      if (features.length > 0) {
+        return
+      }
+
       onAddPoint((current) => {
         const currentProject = projectRef.current
         const currentMode = modeRef.current
@@ -98,21 +113,119 @@ export function useDrawingEngine({
         return [...current, point]
       })
     },
-    [isMounted, modeRef, onAddPoint, onMessage, snapPreviewRef],
+    [isMounted, modeRef, onAddPoint, onMessage, snapPreviewRef, map],
   )
 
   useEffect(() => {
-    if (!map) {
-      return
+    if (!map) return
+
+    let draggingIndex: number | null = null
+
+    const handleMouseDown = (e: any) => {
+      if (!toolsEnabledRef.current) return
+      const currentPoints = draftPointsRef.current ?? []
+      if (currentPoints.length === 0) return
+
+      let closestIndex = -1
+      let minDist = Infinity
+      currentPoints.forEach((pt, i) => {
+        const screenPt = map.project(pt as any)
+        const dist = Math.hypot(screenPt.x - e.point.x, screenPt.y - e.point.y)
+        if (dist < 15) {
+          if (dist < minDist) {
+            minDist = dist
+            closestIndex = i
+          }
+        }
+      })
+
+      if (closestIndex === -1) return
+
+      if (e.originalEvent.altKey || e.originalEvent.button === 2) {
+        e.preventDefault()
+        onAddPoint((cur) => cur.filter((_, idx) => idx !== closestIndex))
+        return
+      }
+
+      if (e.originalEvent.button === 0) {
+        e.preventDefault()
+        draggingIndex = closestIndex
+        map.getCanvas().style.cursor = 'grabbing'
+        map.dragPan.disable()
+      }
     }
+
+    const handleMouseMove = (e: any) => {
+      if (draggingIndex !== null) {
+        const point: Position = snapPreviewRef.current?.point ?? [e.lngLat.lng, e.lngLat.lat]
+        onAddPoint((cur) => {
+          const next = [...cur]
+          next[draggingIndex!] = point
+          return next
+        })
+      }
+    }
+
+    const handleMouseUp = () => {
+      if (draggingIndex !== null) {
+        draggingIndex = null
+        map.getCanvas().style.cursor = ''
+        map.dragPan.enable()
+      }
+    }
+
+    const handleContextMenu = (e: any) => {
+      const features = map.queryRenderedFeatures(e.point, { layers: ['draft-feature-vertex'] })
+      if (features.length > 0) {
+        e.preventDefault()
+      }
+    }
+
+    const handleDblClick = (e: any) => {
+      if (!toolsEnabledRef.current || modeRef.current === 'select' || modeRef.current === 'delete') return
+      e.preventDefault()
+      onSaveDraftRef.current()
+    }
+
     map.on('click', handleMapClick)
+    map.on('mousedown', 'draft-feature-vertex', handleMouseDown)
+    map.on('mousemove', handleMouseMove)
+    map.on('mouseup', handleMouseUp)
+    map.on('contextmenu', handleContextMenu)
+    map.on('dblclick', handleDblClick)
+
+    map.doubleClickZoom.disable()
+
     return () => {
       map.off('click', handleMapClick)
+      map.off('mousedown', 'draft-feature-vertex', handleMouseDown)
+      map.off('mousemove', handleMouseMove)
+      map.off('mouseup', handleMouseUp)
+      map.off('contextmenu', handleContextMenu)
+      map.off('dblclick', handleDblClick)
+      map.doubleClickZoom.enable()
     }
-  }, [map, handleMapClick])
-}
+  }, [map, handleMapClick, onAddPoint, draftPointsRef, snapPreviewRef, modeRef])
 
-// --- Shared utility functions for feature creation ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!toolsEnabledRef.current || modeRef.current === 'select' || modeRef.current === 'delete') return
+
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        onSaveDraftRef.current()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        onAddPoint(() => [])
+      } else if (e.key === 'Backspace' || e.key === 'Delete' || (e.ctrlKey && e.key === 'z') || (e.metaKey && e.key === 'z')) {
+        e.preventDefault()
+        onAddPoint((cur) => cur.slice(0, -1))
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onAddPoint, modeRef])
+}
 
 export const featureTypeGeometry: Record<string, DrawMode> = {
   flight_zone: 'polygon',
@@ -154,39 +267,62 @@ export const featureTypeGeometry: Record<string, DrawMode> = {
   poi: 'point',
 }
 
-export function draftToFeature(mode: DrawMode, points: Position[], featureType: string): Feature | null {
-  // Point-based modes
-  if ((mode === 'point' || mode === 'door') && points.length === 1) {
-    return {
+export function draftToFeatures(
+  mode: DrawMode,
+  points: Position[],
+  featureType: string,
+  hoverCoordinate: Position | null
+): FeatureCollection | null {
+  if (points.length === 0) return null
+
+  const features: Feature[] = []
+  
+  features.push({
+    type: 'Feature',
+    geometry: { type: 'MultiPoint', coordinates: points },
+    properties: { featureType, isDraftVertex: true },
+  })
+
+  const previewPoints = [...points]
+  if (hoverCoordinate && !['point', 'door'].includes(mode)) {
+    previewPoints.push(hoverCoordinate)
+  }
+
+  if (['point', 'door'].includes(mode)) {
+    features.push({
       type: 'Feature',
-      geometry: { type: 'Point', coordinates: points[0] },
+      geometry: { type: 'Point', coordinates: previewPoints[0] },
       properties: { featureType },
+    })
+  } else if (['line', 'wall', 'indoor_route'].includes(mode)) {
+    if (previewPoints.length >= 2) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: previewPoints },
+        properties: { featureType },
+      })
+    }
+  } else if (['polygon', 'room', 'corridor'].includes(mode)) {
+    if (previewPoints.length >= 3) {
+      const ring = [...previewPoints, previewPoints[0]]
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [ring] },
+        properties: { featureType },
+      })
+    } else if (previewPoints.length === 2) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: previewPoints },
+        properties: { featureType },
+      })
     }
   }
-  // Line-based modes
-  if ((mode === 'line' || mode === 'wall' || mode === 'indoor_route') && points.length >= 2) {
-    return {
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: points },
-      properties: { featureType },
-    }
-  }
-  // Polygon-based modes
-  if ((mode === 'polygon' || mode === 'room' || mode === 'corridor') && points.length >= 3) {
-    const ring = [...points, points[0]]
-    return {
-      type: 'Feature',
-      geometry: { type: 'Polygon', coordinates: [ring] },
-      properties: { featureType },
-    }
-  }
-  return null
+
+  return { type: 'FeatureCollection', features }
 }
 
 export function activeLayerForProject(layers: SpatialLayer[]): SpatialLayer | null {
-  // Prefer a layer that has actual feature types so tools are enabled
-  const usable = layers.find((layer) => !layer.locked && (layer.featureTypes?.length ?? 0) > 0)
-  if (usable) return usable
   return layers.find((layer) => !layer.locked) ?? null
 }
 
@@ -198,7 +334,6 @@ export function layerSupportsMode(layer: SpatialLayer | null, mode: DrawMode) {
     return true
   }
   const featureTypes = layer.featureTypes ?? []
-  // Map indoor modes to their underlying geometry modes for compatibility
   const geometryMode = indoorModeToGeometry(mode)
   return featureTypes.some((featureType) => featureTypeGeometry[featureType] === geometryMode)
 }
@@ -219,29 +354,14 @@ function indoorModeToGeometry(mode: DrawMode): DrawMode {
 }
 
 export function featureTypeForLayer(layer: SpatialLayer | null, mode: DrawMode) {
-  // Indoor modes map directly to their feature type name
-  const indoorModeFeatureType: Partial<Record<DrawMode, string>> = {
-    room: 'room',
-    wall: 'wall',
-    door: 'door',
-    corridor: 'corridor',
-    indoor_route: 'indoor_route',
-  }
-  const directMapping = indoorModeFeatureType[mode]
-  if (directMapping) {
-    return directMapping
-  }
   if (!layer) {
     return mode === 'polygon' ? 'custom_area' : mode === 'line' ? 'custom_line' : 'custom_point'
   }
-  const geometryMode = indoorModeToGeometry(mode)
   return (
-    layer.featureTypes?.find((featureType) => featureTypeGeometry[featureType] === geometryMode) ??
+    layer.featureTypes?.find((featureType) => featureTypeGeometry[featureType] === mode) ??
     (mode === 'polygon' ? 'custom_area' : mode === 'line' ? 'custom_line' : 'custom_point')
   )
 }
-
-// --- Measurement utilities ---
 
 function distanceMeters(left: Position, right: Position) {
   const radius = 6_371_000
@@ -281,14 +401,16 @@ function polygonAreaMeters(ring: Position[]) {
   return Math.abs(area / 2)
 }
 
-export function featureMeasurement(feature: Feature | null) {
+export function featureMeasurement(draftCollection: FeatureCollection | null) {
+  if (!draftCollection) return 'No draft feature'
+  const feature = draftCollection.features.find(f => !f.properties?.isDraftVertex && (f.geometry.type === 'Polygon' || f.geometry.type === 'LineString')) || draftCollection.features[0]
   if (!feature) return 'No draft feature'
   if (feature.geometry.type === 'Point') {
-    const [lng, lat] = feature.geometry.coordinates
+    const [lng, lat] = feature.geometry.coordinates as Position
     return `${lat.toFixed(6)}, ${lng.toFixed(6)}`
   }
   if (feature.geometry.type === 'LineString') {
-    const coordinates = feature.geometry.coordinates
+    const coordinates = feature.geometry.coordinates as Position[]
     const meters = coordinates.reduce((sum, point, index) => {
       if (index === 0) return sum
       return sum + distanceMeters(coordinates[index - 1], point)
@@ -296,7 +418,7 @@ export function featureMeasurement(feature: Feature | null) {
     return `Length ${formatDistance(meters)}`
   }
   if (feature.geometry.type === 'Polygon') {
-    const ring = feature.geometry.coordinates[0]
+    const ring = (feature.geometry.coordinates as Position[][])[0]
     const perimeter = ring.reduce((sum, point, index) => {
       if (index === 0) return sum
       return sum + distanceMeters(ring[index - 1], point)

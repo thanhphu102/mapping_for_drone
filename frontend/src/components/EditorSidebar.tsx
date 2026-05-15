@@ -13,7 +13,7 @@ interface EditorSidebarProps {
   mapReady: boolean
   boundaryRendered: boolean
   visibleFeatures: Feature[]
-  draftFeature: Feature | null
+  draftFeature: GeoJSON.FeatureCollection | null
   hoverCoordinate: Position | null
   snapPreview: SnapPreview | null
   message: string
@@ -82,9 +82,8 @@ export function EditorSidebar({
               <li key={layer.id}>
                 <button
                   type="button"
-                  className={`flex w-full items-center justify-between px-3 py-2 text-sm ${
-                    activeLayer?.id === layer.id ? 'bg-sky-50' : 'bg-white'
-                  }`}
+                  className={`flex w-full items-center justify-between px-3 py-2 text-sm ${activeLayer?.id === layer.id ? 'bg-sky-50' : 'bg-white'
+                    }`}
                   onClick={() => {
                     if (!layer.locked) {
                       onSelectLayer(layer.id)

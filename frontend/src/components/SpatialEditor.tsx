@@ -22,7 +22,7 @@ import {
   activeLayerForProject,
   layerSupportsMode,
   featureTypeForLayer,
-  draftToFeature,
+  draftToFeatures,
 } from '../hooks/useDrawingEngine'
 
 const DEFAULT_PROJECT_CONFIG: ProjectCanvasConfig = {
@@ -64,6 +64,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const isMountedRef = useRef(false)
   const modeRef = useRef<DrawMode>('select')
   const snapPreviewRef = useRef<SnapPreview | null>(null)
+  const draftPointsRef = useRef<Position[]>([])
 
   // --- Core state ---
   const [project, setProject] = useState<DrawingProject | null>(null)
@@ -119,14 +120,14 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       return userMode
     }
     return (
-      (['polygon', 'line', 'point', 'room', 'corridor', 'wall', 'indoor_route', 'door'] as DrawMode[]).find(
-        (candidate) => layerSupportsMode(activeLayer, candidate),
+      (['polygon', 'line', 'point'] as DrawMode[]).find((candidate) =>
+        layerSupportsMode(activeLayer, candidate),
       ) ?? 'select'
     )
   }, [activeLayer, userMode])
 
   const activeFeatureType = featureTypeForLayer(activeLayer, mode)
-  const draftFeature = draftToFeature(mode, draftPoints, activeFeatureType)
+  const draftCollection = draftToFeatures(mode, draftPoints, activeFeatureType, hoverCoordinate)
   const toolsEnabled = mapReady && boundaryRendered
 
   // Derive floor info
@@ -154,7 +155,22 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     snapPreviewRef.current = snapPreview
   }, [snapPreview])
 
+  useEffect(() => {
+    draftPointsRef.current = draftPoints
+  }, [draftPoints])
+
   // --- Stable callbacks ---
+  
+  const handleSetMode = useCallback((newMode: DrawMode) => {
+    if (newMode !== 'select' && newMode !== 'delete' && activeLayer && !layerSupportsMode(activeLayer, newMode)) {
+      const compatibleLayer = layers.find(l => layerSupportsMode(l, newMode))
+      if (compatibleLayer) {
+        setUserActiveLayerId(compatibleLayer.id)
+      }
+    }
+    setUserMode(newMode)
+  }, [activeLayer, layers])
+
   const isMounted = useCallback(() => isMountedRef.current, [])
 
   const handleBoundaryRendered = useCallback(() => {
@@ -168,24 +184,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const handleSnapPreview = useCallback((snap: SnapPreview | null) => {
     setSnapPreview(snap)
   }, [])
-
-  // Figma-like: when user picks a tool, auto-switch to a compatible layer
-  const handleSetMode = useCallback(
-    (nextMode: DrawMode) => {
-      setUserMode(nextMode)
-      // If current layer already supports this mode, nothing to do
-      if (nextMode === 'select' || nextMode === 'delete' || layerSupportsMode(activeLayer, nextMode)) {
-        return
-      }
-      // Find first unlocked layer that supports this mode
-      const compatibleLayer = layers.find((layer) => !layer.locked && layerSupportsMode(layer, nextMode))
-      if (compatibleLayer) {
-        setUserActiveLayerId(compatibleLayer.id)
-        setMessage(`Switched to "${compatibleLayer.name}" layer`)
-      }
-    },
-    [activeLayer, layers],
-  )
 
   const handleHoverCoordinate = useCallback((coord: Position) => {
     setHoverCoordinate(coord)
@@ -203,6 +201,53 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onHoverCoordinate: handleHoverCoordinate,
   })
 
+  // --- Save / Publish ---
+  const handleSaveDraft = useCallback(async () => {
+    const finalFeature = draftCollection?.features.find(
+      (f) => !f.properties?.isDraftVertex && (f.geometry.type === 'Polygon' || f.geometry.type === 'LineString' || f.geometry.type === 'Point')
+    )
+    if (!project || !finalFeature || !toolsEnabled) {
+      return
+    }
+    setIsSaving(true)
+    setMessage('Saving draft...')
+    try {
+      const response = await saveDrawingFeature(project.id, {
+        ...finalFeature,
+        properties: {
+          ...(finalFeature.properties ?? {}),
+          featureType: activeFeatureType,
+          layerId: activeLayer?.id ?? null,
+          layerName: activeLayer?.name ?? null,
+          minZoom: activeLayer?.minZoom ?? project.boundaryMinZoom,
+          maxZoom: activeLayer?.maxZoom ?? 24,
+          floorId: selectedFloorId ?? null,
+        },
+      })
+      if (!isMountedRef.current) {
+        return
+      }
+      setVisibleFeatures((current) => [...current, response.feature])
+      setDraftPoints([])
+      setMessage('Draft feature saved')
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Save failed')
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsSaving(false)
+      }
+    }
+  }, [
+    project,
+    draftCollection,
+    toolsEnabled,
+    activeFeatureType,
+    activeLayer,
+    selectedFloorId,
+  ])
+
   useDrawingEngine({
     map,
     project,
@@ -210,7 +255,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     isMounted,
     modeRef,
     snapPreviewRef,
+    draftPointsRef,
     onAddPoint: setDraftPoints,
+    onSaveDraft: handleSaveDraft,
     onMessage: handleMessage,
   })
 
@@ -222,7 +269,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     project,
     projectConfig,
     visibleFeatures,
-    draftFeature,
+    draftCollection,
     snapPreview,
     isMounted,
     onBoundaryRendered: handleBoundaryRendered,
@@ -323,42 +370,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     }
   }, [activeLayer?.id, mapZoom, project, map, mapReady, selectedFloorId])
 
-  // --- Save / Publish ---
-  const handleSaveDraft = async () => {
-    if (!project || !draftFeature || !toolsEnabled) {
-      return
-    }
-    setIsSaving(true)
-    setMessage('Saving draft...')
-    try {
-      const response = await saveDrawingFeature(project.id, {
-        ...draftFeature,
-        properties: {
-          ...(draftFeature.properties ?? {}),
-          featureType: activeFeatureType,
-          layerId: activeLayer?.id ?? null,
-          layerName: activeLayer?.name ?? null,
-          minZoom: activeLayer?.minZoom ?? project.boundaryMinZoom,
-          maxZoom: activeLayer?.maxZoom ?? 24,
-        },
-      })
-      if (!isMountedRef.current) {
-        return
-      }
-      setVisibleFeatures((current) => [...current, response.feature])
-      setDraftPoints([])
-      setMessage('Draft feature saved')
-    } catch (error) {
-      if (isMountedRef.current) {
-        setMessage(error instanceof Error ? error.message : 'Save failed')
-      }
-    } finally {
-      if (isMountedRef.current) {
-        setIsSaving(false)
-      }
-    }
-  }
-
   const handlePublish = async () => {
     if (!project) {
       return
@@ -443,11 +454,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         />
         <EditorToolbar
           mode={mode}
-          activeLayer={activeLayer}
           layers={layers}
           toolsEnabled={toolsEnabled}
           isSaving={isSaving}
-          draftFeature={draftFeature}
+          draftFeature={draftCollection}
           project={project}
           onSetMode={handleSetMode}
           onClearDraft={() => setDraftPoints([])}
@@ -497,7 +507,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         mapReady={mapReady}
         boundaryRendered={boundaryRendered}
         visibleFeatures={visibleFeatures}
-        draftFeature={draftFeature}
+        draftFeature={draftCollection}
         hoverCoordinate={hoverCoordinate}
         snapPreview={snapPreview}
         message={message}

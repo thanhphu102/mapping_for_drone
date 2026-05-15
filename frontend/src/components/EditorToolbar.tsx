@@ -13,18 +13,16 @@ import {
   Trash2,
   DoorOpen,
 } from 'lucide-react'
-import type { Feature } from 'geojson'
 import type { EditorMode, SpatialLayer } from '../types/drone'
 import type { DrawMode } from '../hooks/useDrawingEngine'
 import { layerSupportsMode } from '../hooks/useDrawingEngine'
 
 interface EditorToolbarProps {
   mode: DrawMode
-  activeLayer: SpatialLayer | null
   layers: SpatialLayer[]
   toolsEnabled: boolean
   isSaving: boolean
-  draftFeature: Feature | null
+  draftFeature: GeoJSON.FeatureCollection | null
   project: { id: string; editorMode: EditorMode } | null
   onSetMode: (mode: DrawMode) => void
   onClearDraft: () => void
@@ -54,7 +52,6 @@ const deleteTools: Array<{ mode: DrawMode; label: string; icon: typeof MousePoin
 
 export function EditorToolbar({
   mode,
-  activeLayer,
   layers,
   toolsEnabled,
   isSaving,
@@ -84,20 +81,17 @@ export function EditorToolbar({
       ) : null}
       {tools.map((tool) => {
         const Icon = tool.icon
-        const supported =
-          layerSupportsMode(activeLayer, tool.mode) ||
-          layers.some((layer) => !layer.locked && layerSupportsMode(layer, tool.mode))
+        const supported = layers.some(layer => layerSupportsMode(layer, tool.mode))
         return (
           <button
             key={tool.mode}
             type="button"
-            className={`rounded-md p-2 transition ${
-              mode === tool.mode
+            className={`rounded-md p-2 transition ${mode === tool.mode
                 ? 'bg-slate-950 text-white'
                 : tool.mode === 'delete'
                   ? 'text-rose-500 hover:bg-rose-50 hover:text-rose-700'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-            } disabled:cursor-not-allowed disabled:opacity-45`}
+              } disabled:cursor-not-allowed disabled:opacity-45`}
             onClick={() => {
               onSetMode(tool.mode)
               if (tool.mode !== mode) {
