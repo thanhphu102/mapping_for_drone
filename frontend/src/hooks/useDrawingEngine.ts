@@ -15,6 +15,7 @@ export type DrawMode =
   | 'corridor'
   | 'indoor_route'
   | 'delete'
+  | 'delete_lasso'
 
 function pointInRing(point: Position, ring: Position[]) {
   const [x, y] = point
@@ -51,6 +52,7 @@ interface UseDrawingEngineOptions {
   onAddPoint: (updater: (current: Position[]) => Position[]) => void
   onSaveDraft: () => void
   onMessage: (msg: string) => void
+  onDeleteFeatures?: (featureIds: string[]) => void
 }
 
 export function useDrawingEngine({
@@ -64,6 +66,7 @@ export function useDrawingEngine({
   onAddPoint,
   onSaveDraft,
   onMessage,
+  onDeleteFeatures,
 }: UseDrawingEngineOptions) {
   const projectRef = useRef(project)
   const toolsEnabledRef = useRef(toolsEnabled)
@@ -84,6 +87,19 @@ export function useDrawingEngine({
   const handleMapClick = useCallback(
     (event: any) => {
       if (!toolsEnabledRef.current || !map) {
+        return
+      }
+
+      const currentMode = modeRef.current
+      if (currentMode === 'delete') {
+        const features = map.queryRenderedFeatures(event.point, {
+          layers: ['project-features-fill', 'project-features-line', 'project-features-point'],
+        })
+        const target = features.find((feature) => feature.id || feature.properties?.id)
+        const targetId = target?.id ?? target?.properties?.id
+        if (targetId && onDeleteFeatures) {
+          onDeleteFeatures([String(targetId)])
+        }
         return
       }
 
@@ -113,7 +129,7 @@ export function useDrawingEngine({
         return [...current, point]
       })
     },
-    [isMounted, modeRef, onAddPoint, onMessage, snapPreviewRef, map],
+    [isMounted, modeRef, onAddPoint, onMessage, onDeleteFeatures, snapPreviewRef, map],
   )
 
   useEffect(() => {
@@ -302,7 +318,7 @@ export function draftToFeatures(
         properties: { featureType },
       })
     }
-  } else if (['polygon', 'room', 'corridor'].includes(mode)) {
+  } else if (['polygon', 'room', 'corridor', 'delete_lasso'].includes(mode)) {
     if (previewPoints.length >= 3) {
       const ring = [...previewPoints, previewPoints[0]]
       features.push({
@@ -330,7 +346,7 @@ export function layerSupportsMode(layer: SpatialLayer | null, mode: DrawMode) {
   if (!layer || layer.locked) {
     return false
   }
-  if (mode === 'select' || mode === 'delete') {
+  if (mode === 'select' || mode === 'delete' || mode === 'delete_lasso') {
     return true
   }
   const featureTypes = layer.featureTypes ?? []
@@ -354,6 +370,9 @@ function indoorModeToGeometry(mode: DrawMode): DrawMode {
 }
 
 export function featureTypeForLayer(layer: SpatialLayer | null, mode: DrawMode) {
+  if (mode === 'delete_lasso') {
+    return 'custom_area'
+  }
   if (!layer) {
     return mode === 'polygon' ? 'custom_area' : mode === 'line' ? 'custom_line' : 'custom_point'
   }

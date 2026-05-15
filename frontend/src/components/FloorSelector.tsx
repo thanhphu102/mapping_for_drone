@@ -4,18 +4,36 @@ interface FloorSelectorProps {
   floors: SpatialFloor[]
   selectedFloorId: string | null
   onSelectFloor: (floorId: string) => void
+  onCreateFloor?: () => void
+  isRequired?: boolean
 }
 
 export function FloorSelector({
   floors,
   selectedFloorId,
   onSelectFloor,
+  onCreateFloor,
+  isRequired = false,
 }: FloorSelectorProps) {
   if (floors.length === 0) {
-    return null
+    return (
+      <div className="floor-selector absolute right-4 top-1/2 z-20 flex -translate-y-1/2 flex-col rounded-xl border border-slate-200/80 bg-white/95 p-3 text-xs shadow-lg backdrop-blur-sm">
+        <div className="font-semibold text-slate-700">No floors yet</div>
+        <p className="mt-1 text-slate-500">
+          {isRequired ? 'Select or create a floor to draw indoor features.' : 'Create a floor to start drawing.'}
+        </p>
+        <button
+          type="button"
+          className="mt-3 rounded-md bg-sky-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-sky-700"
+          onClick={onCreateFloor}
+          disabled={!onCreateFloor}
+        >
+          Create floor
+        </button>
+      </div>
+    )
   }
 
-  // Sort floors top-to-bottom: highest level first
   const sortedFloors = [...floors].sort((a, b) => b.level - a.level)
 
   return (

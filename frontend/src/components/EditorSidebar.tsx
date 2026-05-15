@@ -1,4 +1,4 @@
-import { Check, MapPinned } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, MapPinned } from 'lucide-react'
 import type { Feature, Position } from 'geojson'
 import type { DrawingProject, ProjectCanvasConfig, SpatialLayer } from '../types/drone'
 import type { SnapPreview } from '../hooks/useSnapEngine'
@@ -19,6 +19,8 @@ interface EditorSidebarProps {
   message: string
   onSelectLayer: (layerId: string) => void
   onClearDraft: () => void
+  isCollapsed: boolean
+  onToggleCollapsed: () => void
 }
 
 const modeSummary = {
@@ -46,13 +48,31 @@ export function EditorSidebar({
   message,
   onSelectLayer,
   onClearDraft,
+  isCollapsed,
+  onToggleCollapsed,
 }: EditorSidebarProps) {
   const localOrigin: Position | null = project ? [project.bbox[0], project.bbox[1]] : null
   const hoverLocal = hoverCoordinate && localOrigin ? localCoordinates(hoverCoordinate, localOrigin) : null
+  const ToggleIcon = isCollapsed ? ChevronLeft : ChevronRight
 
   return (
-    <aside className="flex h-full w-[380px] max-w-[42vw] flex-col border-l border-slate-200 bg-white">
-      <header className="border-b border-slate-200 px-4 py-3">
+    <aside className={`relative flex h-full border-l border-slate-200 bg-white ${isCollapsed ? 'w-10' : 'w-[380px] max-w-[42vw]'}`}>
+      <button
+        type="button"
+        className="absolute -left-3 top-6 z-30 flex size-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-md transition hover:bg-slate-50"
+        onClick={onToggleCollapsed}
+        aria-label={isCollapsed ? 'Expand side panel' : 'Collapse side panel'}
+      >
+        <ToggleIcon className="size-4" aria-hidden="true" />
+      </button>
+
+      {isCollapsed ? (
+        <div className="flex h-full w-full flex-col items-center justify-center text-[10px] uppercase tracking-wide text-slate-400">
+          Info
+        </div>
+      ) : (
+        <div className="flex h-full w-full flex-col">
+          <header className="border-b border-slate-200 px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-sky-700">
           <MapPinned className="size-4" aria-hidden="true" />
           Spatial Editor
@@ -65,9 +85,9 @@ export function EditorSidebar({
             {project.editorMode} · {project.status} · {project.source}
           </p>
         ) : null}
-      </header>
+          </header>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         <section>
           <h2 className="text-sm font-semibold text-slate-950">Mode</h2>
           <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -192,7 +212,9 @@ export function EditorSidebar({
         <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
           {message}
         </p>
-      </div>
+          </div>
+        </div>
+      )}
     </aside>
   )
 }
