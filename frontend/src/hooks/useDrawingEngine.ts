@@ -81,7 +81,7 @@ export function useDrawingEngine({
       onAddPoint((current) => {
         const currentProject = projectRef.current
         const currentMode = modeRef.current
-        if (!currentProject || currentMode === 'select') {
+        if (!currentProject || currentMode === 'select' || currentMode === 'delete') {
           return current
         }
         const point: Position = snapPreviewRef.current?.point ?? [event.lngLat.lng, event.lngLat.lat]
@@ -184,6 +184,9 @@ export function draftToFeature(mode: DrawMode, points: Position[], featureType: 
 }
 
 export function activeLayerForProject(layers: SpatialLayer[]): SpatialLayer | null {
+  // Prefer a layer that has actual feature types so tools are enabled
+  const usable = layers.find((layer) => !layer.locked && (layer.featureTypes?.length ?? 0) > 0)
+  if (usable) return usable
   return layers.find((layer) => !layer.locked) ?? null
 }
 
@@ -216,11 +219,24 @@ function indoorModeToGeometry(mode: DrawMode): DrawMode {
 }
 
 export function featureTypeForLayer(layer: SpatialLayer | null, mode: DrawMode) {
+  // Indoor modes map directly to their feature type name
+  const indoorModeFeatureType: Partial<Record<DrawMode, string>> = {
+    room: 'room',
+    wall: 'wall',
+    door: 'door',
+    corridor: 'corridor',
+    indoor_route: 'indoor_route',
+  }
+  const directMapping = indoorModeFeatureType[mode]
+  if (directMapping) {
+    return directMapping
+  }
   if (!layer) {
     return mode === 'polygon' ? 'custom_area' : mode === 'line' ? 'custom_line' : 'custom_point'
   }
+  const geometryMode = indoorModeToGeometry(mode)
   return (
-    layer.featureTypes?.find((featureType) => featureTypeGeometry[featureType] === mode) ??
+    layer.featureTypes?.find((featureType) => featureTypeGeometry[featureType] === geometryMode) ??
     (mode === 'polygon' ? 'custom_area' : mode === 'line' ? 'custom_line' : 'custom_point')
   )
 }

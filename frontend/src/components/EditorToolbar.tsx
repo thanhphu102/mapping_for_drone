@@ -21,6 +21,7 @@ import { layerSupportsMode } from '../hooks/useDrawingEngine'
 interface EditorToolbarProps {
   mode: DrawMode
   activeLayer: SpatialLayer | null
+  layers: SpatialLayer[]
   toolsEnabled: boolean
   isSaving: boolean
   draftFeature: Feature | null
@@ -54,6 +55,7 @@ const deleteTools: Array<{ mode: DrawMode; label: string; icon: typeof MousePoin
 export function EditorToolbar({
   mode,
   activeLayer,
+  layers,
   toolsEnabled,
   isSaving,
   draftFeature,
@@ -82,7 +84,9 @@ export function EditorToolbar({
       ) : null}
       {tools.map((tool) => {
         const Icon = tool.icon
-        const supported = layerSupportsMode(activeLayer, tool.mode)
+        const supported =
+          layerSupportsMode(activeLayer, tool.mode) ||
+          layers.some((layer) => !layer.locked && layerSupportsMode(layer, tool.mode))
         return (
           <button
             key={tool.mode}

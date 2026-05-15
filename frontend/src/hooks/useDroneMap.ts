@@ -18,6 +18,7 @@ const rasterOsmStyle: StyleSpecification = {
         'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
       ],
       tileSize: 256,
+      maxzoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
     },
   },

@@ -119,8 +119,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       return userMode
     }
     return (
-      (['polygon', 'line', 'point'] as DrawMode[]).find((candidate) =>
-        layerSupportsMode(activeLayer, candidate),
+      (['polygon', 'line', 'point', 'room', 'corridor', 'wall', 'indoor_route', 'door'] as DrawMode[]).find(
+        (candidate) => layerSupportsMode(activeLayer, candidate),
       ) ?? 'select'
     )
   }, [activeLayer, userMode])
@@ -168,6 +168,24 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const handleSnapPreview = useCallback((snap: SnapPreview | null) => {
     setSnapPreview(snap)
   }, [])
+
+  // Figma-like: when user picks a tool, auto-switch to a compatible layer
+  const handleSetMode = useCallback(
+    (nextMode: DrawMode) => {
+      setUserMode(nextMode)
+      // If current layer already supports this mode, nothing to do
+      if (nextMode === 'select' || nextMode === 'delete' || layerSupportsMode(activeLayer, nextMode)) {
+        return
+      }
+      // Find first unlocked layer that supports this mode
+      const compatibleLayer = layers.find((layer) => !layer.locked && layerSupportsMode(layer, nextMode))
+      if (compatibleLayer) {
+        setUserActiveLayerId(compatibleLayer.id)
+        setMessage(`Switched to "${compatibleLayer.name}" layer`)
+      }
+    },
+    [activeLayer, layers],
+  )
 
   const handleHoverCoordinate = useCallback((coord: Position) => {
     setHoverCoordinate(coord)
@@ -426,11 +444,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         <EditorToolbar
           mode={mode}
           activeLayer={activeLayer}
+          layers={layers}
           toolsEnabled={toolsEnabled}
           isSaving={isSaving}
           draftFeature={draftFeature}
           project={project}
-          onSetMode={setUserMode}
+          onSetMode={handleSetMode}
           onClearDraft={() => setDraftPoints([])}
           onSaveDraft={handleSaveDraft}
           onPublish={handlePublish}
