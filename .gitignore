@@ -3,4 +3,4 @@ leaflet
 .github
 backend/data/
 backend/__pycache__/
-frontend/node_module/
+frontend/node_modules
