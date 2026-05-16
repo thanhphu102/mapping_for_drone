@@ -188,6 +188,20 @@ export function SpatialCanvasOverlay({
   snapPreview,
 }: SpatialCanvasOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const visibleFeaturesRef = useRef<Feature[]>(visibleFeatures)
+  const selectedSetRef = useRef<Set<string>>(new Set(selectedFeatureIds))
+  const draftCollectionRef = useRef<FeatureCollection | null>(draftCollection)
+  const snapPreviewRef = useRef<SnapPreview | null>(snapPreview)
+  const pendingFrameRef = useRef<number | null>(null)
+  const scheduleRenderRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    visibleFeaturesRef.current = visibleFeatures
+    selectedSetRef.current = new Set(selectedFeatureIds)
+    draftCollectionRef.current = draftCollection
+    snapPreviewRef.current = snapPreview
+    scheduleRenderRef.current?.()
+  }, [visibleFeatures, selectedFeatureIds, draftCollection, snapPreview])
 
   useEffect(() => {
     if (!map) return
@@ -196,10 +210,8 @@ export function SpatialCanvasOverlay({
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    let frame = 0
-    const selectedSet = new Set(selectedFeatureIds)
-
     const render = () => {
+      pendingFrameRef.current = null
       const rect = canvas.getBoundingClientRect()
       const dpr = window.devicePixelRatio || 1
       const width = Math.max(1, Math.floor(rect.width * dpr))
@@ -211,16 +223,16 @@ export function SpatialCanvasOverlay({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, rect.width, rect.height)
 
-      visibleFeatures.forEach((feature) => {
-        drawFeature(ctx, map, feature, selectedSet.has(featureId(feature)))
+      visibleFeaturesRef.current.forEach((feature) => {
+        drawFeature(ctx, map, feature, selectedSetRef.current.has(featureId(feature)))
       })
 
-      draftCollection?.features.forEach((feature) => {
+      draftCollectionRef.current?.features.forEach((feature) => {
         drawFeature(ctx, map, feature as Feature, false, true)
       })
 
-      if (snapPreview) {
-        const point = projectPoint(map, snapPreview.point)
+      if (snapPreviewRef.current) {
+        const point = projectPoint(map, snapPreviewRef.current.point)
         ctx.beginPath()
         ctx.arc(point.x, point.y, 6, 0, Math.PI * 2)
         ctx.fillStyle = '#f97316'
@@ -232,25 +244,30 @@ export function SpatialCanvasOverlay({
     }
 
     const schedule = () => {
-      window.cancelAnimationFrame(frame)
-      frame = window.requestAnimationFrame(render)
+      if (pendingFrameRef.current !== null) {
+        return
+      }
+      pendingFrameRef.current = window.requestAnimationFrame(render)
     }
+    scheduleRenderRef.current = schedule
 
     const observer = new ResizeObserver(schedule)
     observer.observe(canvas)
-    map.on('move', schedule)
-    map.on('zoom', schedule)
+    map.on('render', schedule)
     map.on('resize', schedule)
     schedule()
 
     return () => {
       observer.disconnect()
-      window.cancelAnimationFrame(frame)
-      map.off('move', schedule)
-      map.off('zoom', schedule)
+      if (pendingFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingFrameRef.current)
+        pendingFrameRef.current = null
+      }
+      scheduleRenderRef.current = null
+      map.off('render', schedule)
       map.off('resize', schedule)
     }
-  }, [draftCollection, map, selectedFeatureIds, snapPreview, visibleFeatures])
+  }, [map])
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" />
 }

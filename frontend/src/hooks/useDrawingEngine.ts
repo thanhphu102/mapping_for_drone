@@ -25,6 +25,13 @@ export type DrawMode =
   | 'indoor_route'
   | 'delete_lasso'
 
+type ActiveDrawGestureKind =
+  | 'box_shape'
+  | 'pen'
+  | 'delete_lasso'
+  | 'move_feature'
+  | 'box_select'
+
 function pointInRing(point: Position, ring: Position[]) {
   const [x, y] = point
   let inside = false
@@ -235,9 +242,239 @@ export function useDrawingEngine({
     let freehandPoints: Position[] = []
     let lassoStarted = false
     let lassoStart: Position | null = null
+    let activeGesture: ActiveDrawGestureKind | null = null
+    let windowListenersAttached = false
+
+    interface PointerState {
+      lng: number
+      lat: number
+      x: number
+      y: number
+      shiftKey: boolean
+    }
 
     const setCursor = (value: string) => {
       map.getCanvas().style.cursor = value
+    }
+
+    const syncDragPanByMode = () => {
+      if (modeRef.current === 'move') {
+        map.dragPan.enable()
+      } else {
+        map.dragPan.disable()
+      }
+    }
+
+    const hasActiveGesture = () =>
+      activeGesture !== null ||
+      boxShapeStart !== null ||
+      freehandStarted ||
+      lassoStarted ||
+      movingFeatures !== null ||
+      boxStart !== null
+
+    const pointerFromMapEvent = (event: MapMouseEvent): PointerState => ({
+      lng: event.lngLat.lng,
+      lat: event.lngLat.lat,
+      x: event.point.x,
+      y: event.point.y,
+      shiftKey: Boolean(event.originalEvent?.shiftKey),
+    })
+
+    const pointerFromWindowEvent = (event: MouseEvent): PointerState => {
+      const rect = map.getCanvas().getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+      const lngLat = map.unproject([x, y])
+      return {
+        lng: lngLat.lng,
+        lat: lngLat.lat,
+        x,
+        y,
+        shiftKey: Boolean(event.shiftKey),
+      }
+    }
+
+    const detachWindowListeners = () => {
+      if (!windowListenersAttached) return
+      window.removeEventListener('mousemove', handleWindowMouseMove)
+      window.removeEventListener('mouseup', handleWindowMouseUp)
+      windowListenersAttached = false
+    }
+
+    const syncWindowListeners = () => {
+      if (hasActiveGesture() && !windowListenersAttached) {
+        window.addEventListener('mousemove', handleWindowMouseMove)
+        window.addEventListener('mouseup', handleWindowMouseUp)
+        windowListenersAttached = true
+        return
+      }
+      if (!hasActiveGesture()) {
+        detachWindowListeners()
+      }
+    }
+
+    const finalizeShapeFromPointer = (pointer: PointerState) => {
+      if (!(boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current))) {
+        return
+      }
+      const start = boxShapeStart
+      boxShapeStart = null
+      activeGesture = null
+      setCursor('')
+      suppressClickRef.current = true
+      const rawEnd: Position = [pointer.lng, pointer.lat]
+      const mode = modeRef.current
+      const end: Position =
+        (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && pointer.shiftKey
+          ? constrainSquareByPixels(start, rawEnd)
+          : rawEnd
+      const d = Math.hypot(end[0] - start[0], end[1] - start[1])
+      if (d > 0.000001) {
+        onAddPoint(() => [start, end])
+        if (mode === 'text') {
+          onQuickCreateTextBox?.(start, end)
+          onAddPoint(() => [])
+        } else if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse') {
+          onCommitBoxShape?.(mode, start, end)
+          onAddPoint(() => [])
+        } else {
+          onSaveDraftRef.current()
+        }
+      } else {
+        onAddPoint(() => [])
+      }
+    }
+
+    const finalizePenFromPointer = () => {
+      if (!(freehandStarted && modeRef.current === 'pen')) {
+        return
+      }
+      freehandStarted = false
+      activeGesture = null
+      setCursor('')
+      suppressClickRef.current = true
+      if (freehandPoints.length >= 2) {
+        onCommitPenPath?.(freehandPoints)
+        onAddPoint(() => [])
+      } else {
+        onSaveDraftRef.current()
+      }
+      freehandPoints = []
+    }
+
+    const finalizeLassoFromPointer = () => {
+      if (!(lassoStarted && modeRef.current === 'delete_lasso')) {
+        return
+      }
+      lassoStarted = false
+      lassoStart = null
+      activeGesture = null
+      setCursor('')
+      suppressClickRef.current = true
+      onSaveDraftRef.current()
+    }
+
+    const finalizeMoveFromPointer = () => {
+      if (!movingFeatures) {
+        return
+      }
+      const movedFeatureIds = movingFeatures.featureIds
+      const didMove = movingFeatures.moved
+      movingFeatures = null
+      activeGesture = null
+      setCursor('')
+      if (didMove) {
+        suppressClickRef.current = true
+        onMoveEnd?.(movedFeatureIds)
+      }
+    }
+
+    const finalizeBoxSelectFromPointer = (pointer: PointerState) => {
+      if (!boxStart) {
+        return
+      }
+      const minX = Math.min(boxStart.x, pointer.x)
+      const minY = Math.min(boxStart.y, pointer.y)
+      const maxX = Math.max(boxStart.x, pointer.x)
+      const maxY = Math.max(boxStart.y, pointer.y)
+      const hits = map.queryRenderedFeatures(
+        [
+          [minX, minY],
+          [maxX, maxY],
+        ],
+        { layers: featureLayers },
+      )
+      const uniqueIds = Array.from(
+        new Set(hits.map((feature) => String(feature.id ?? feature.properties?.id ?? '')).filter(Boolean)),
+      )
+      onSetSelection(uniqueIds)
+      boxStart = null
+      activeGesture = null
+      setCursor('')
+    }
+
+    const handlePointerMove = (pointer: PointerState) => {
+      if (boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
+        const rawEnd: Position = [pointer.lng, pointer.lat]
+        const mode = modeRef.current
+        const end: Position =
+          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && pointer.shiftKey
+            ? constrainSquareByPixels(boxShapeStart, rawEnd)
+            : rawEnd
+        onAddPoint(() => [boxShapeStart as Position, end])
+        return
+      }
+
+      if (lassoStarted && modeRef.current === 'delete_lasso') {
+        const point: Position = [pointer.lng, pointer.lat]
+        onAddPoint(() => [lassoStart ?? point, point])
+        return
+      }
+
+      if (freehandStarted && modeRef.current === 'pen') {
+        const point: Position = [pointer.lng, pointer.lat]
+        onAddPoint((cur) => {
+          if (cur.length === 0) return [point]
+          const last = cur[cur.length - 1]
+          const d = Math.hypot(point[0] - last[0], point[1] - last[1])
+          if (d < 0.00001) return cur
+          freehandPoints = [...cur, point]
+          return [...cur, point]
+        })
+        return
+      }
+
+      if (movingFeatures && onMoveFeatures) {
+        const deltaLng = pointer.lng - movingFeatures.lastLng
+        const deltaLat = pointer.lat - movingFeatures.lastLat
+        if (Math.abs(deltaLng) > 0 || Math.abs(deltaLat) > 0) {
+          onMoveFeatures(movingFeatures.featureIds, deltaLng, deltaLat)
+          movingFeatures.lastLng = pointer.lng
+          movingFeatures.lastLat = pointer.lat
+          movingFeatures.moved = true
+        }
+      }
+    }
+
+    const handlePointerUp = (pointer: PointerState) => {
+      finalizeMoveFromPointer()
+      finalizeShapeFromPointer(pointer)
+      finalizePenFromPointer()
+      finalizeLassoFromPointer()
+      finalizeBoxSelectFromPointer(pointer)
+      syncDragPanByMode()
+      syncWindowListeners()
+    }
+
+    function handleWindowMouseMove(event: MouseEvent) {
+      if (!hasActiveGesture()) return
+      handlePointerMove(pointerFromWindowEvent(event))
+    }
+
+    function handleWindowMouseUp(event: MouseEvent) {
+      if (!hasActiveGesture()) return
+      handlePointerUp(pointerFromWindowEvent(event))
     }
 
     const handleMouseDown = (e: MapMouseEvent) => {
@@ -246,33 +483,45 @@ export function useDrawingEngine({
 
       if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse' || mode === 'text') {
         if (e.originalEvent.button !== 0) return
+        e.preventDefault()
+        e.originalEvent.preventDefault()
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
         boxShapeStart = start
+        activeGesture = 'box_shape'
         onAddPoint(() => [start, start])
         map.dragPan.disable()
         setCursor('crosshair')
+        syncWindowListeners()
         return
       }
 
       if (mode === 'pen') {
         if (e.originalEvent.button !== 0) return
+        e.preventDefault()
+        e.originalEvent.preventDefault()
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
         freehandPoints = [start]
         onAddPoint(() => [start])
         freehandStarted = true
+        activeGesture = 'pen'
         map.dragPan.disable()
         setCursor('crosshair')
+        syncWindowListeners()
         return
       }
 
       if (mode === 'delete_lasso') {
         if (e.originalEvent.button !== 0) return
+        e.preventDefault()
+        e.originalEvent.preventDefault()
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
         lassoStart = start
         onAddPoint(() => [start, start])
         lassoStarted = true
+        activeGesture = 'delete_lasso'
         map.dragPan.disable()
         setCursor('crosshair')
+        syncWindowListeners()
         return
       }
 
@@ -282,8 +531,11 @@ export function useDrawingEngine({
       }
 
       if (mode === 'select' && e.originalEvent?.shiftKey) {
+        e.preventDefault()
         boxStart = { x: e.point.x, y: e.point.y }
+        activeGesture = 'box_select'
         setCursor('crosshair')
+        syncWindowListeners()
         return
       }
 
@@ -301,8 +553,10 @@ export function useDrawingEngine({
             lastLat: e.lngLat.lat,
             moved: false,
           }
+          activeGesture = 'move_feature'
           map.dragPan.disable()
           setCursor('grabbing')
+          syncWindowListeners()
           return
         }
       }
@@ -310,136 +564,11 @@ export function useDrawingEngine({
     }
 
     const handleMouseMove = (e: MapMouseEvent) => {
-      if (boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
-        const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
-        const mode = modeRef.current
-        const shiftPressed = Boolean(e.originalEvent?.shiftKey)
-        const end: Position =
-          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shiftPressed
-            ? constrainSquareByPixels(boxShapeStart!, rawEnd)
-            : rawEnd
-        onAddPoint(() => [boxShapeStart!, end])
-        return
-      }
-
-      if (lassoStarted && modeRef.current === 'delete_lasso') {
-        const point: Position = [e.lngLat.lng, e.lngLat.lat]
-        onAddPoint(() => [lassoStart ?? point, point])
-        return
-      }
-
-      if (freehandStarted && modeRef.current === 'pen') {
-        const point: Position = [e.lngLat.lng, e.lngLat.lat]
-        onAddPoint((cur) => {
-          if (cur.length === 0) return [point]
-          const last = cur[cur.length - 1]
-          const d = Math.hypot(point[0] - last[0], point[1] - last[1])
-          if (d < 0.00001) return cur
-          freehandPoints = [...cur, point]
-          return [...cur, point]
-        })
-        return
-      }
-
-      if (movingFeatures && onMoveFeatures) {
-        const deltaLng = e.lngLat.lng - movingFeatures.lastLng
-        const deltaLat = e.lngLat.lat - movingFeatures.lastLat
-        if (Math.abs(deltaLng) > 0 || Math.abs(deltaLat) > 0) {
-          onMoveFeatures(movingFeatures.featureIds, deltaLng, deltaLat)
-          movingFeatures.lastLng = e.lngLat.lng
-          movingFeatures.lastLat = e.lngLat.lat
-          movingFeatures.moved = true
-        }
-        return
-      }
-
+      handlePointerMove(pointerFromMapEvent(e))
     }
 
     const handleMouseUp = (e: MapMouseEvent) => {
-      if (movingFeatures) {
-        const movedFeatureIds = movingFeatures.featureIds
-        const didMove = movingFeatures.moved
-        movingFeatures = null
-        setCursor('')
-        map.dragPan.disable()
-        if (didMove) {
-          suppressClickRef.current = true
-          onMoveEnd?.(movedFeatureIds)
-        }
-      }
-
-      if (boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
-        const start = boxShapeStart
-        boxShapeStart = null
-        setCursor('')
-        map.dragPan.disable()
-        suppressClickRef.current = true
-        const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
-        const mode = modeRef.current
-        const shiftPressed = Boolean(e.originalEvent?.shiftKey)
-        const end: Position =
-          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shiftPressed
-            ? constrainSquareByPixels(start, rawEnd)
-            : rawEnd
-        const d = Math.hypot(end[0] - start[0], end[1] - start[1])
-        if (d > 0.000001) {
-          onAddPoint(() => [start, end])
-          if (mode === 'text') {
-            onQuickCreateTextBox?.(start, end)
-            onAddPoint(() => [])
-          } else if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse') {
-            onCommitBoxShape?.(mode, start, end)
-            onAddPoint(() => [])
-          } else {
-            onSaveDraftRef.current()
-          }
-        } else {
-          onAddPoint(() => [])
-        }
-      }
-
-      if (freehandStarted && modeRef.current === 'pen') {
-        freehandStarted = false
-        setCursor('')
-        map.dragPan.disable()
-        suppressClickRef.current = true
-        if (freehandPoints.length >= 2) {
-          onCommitPenPath?.(freehandPoints)
-          onAddPoint(() => [])
-        } else {
-          onSaveDraftRef.current()
-        }
-        freehandPoints = []
-      }
-
-      if (lassoStarted && modeRef.current === 'delete_lasso') {
-        lassoStarted = false
-        lassoStart = null
-        setCursor('')
-        map.dragPan.disable()
-        suppressClickRef.current = true
-        onSaveDraftRef.current()
-      }
-
-      if (boxStart) {
-        const minX = Math.min(boxStart.x, e.point.x)
-        const minY = Math.min(boxStart.y, e.point.y)
-        const maxX = Math.max(boxStart.x, e.point.x)
-        const maxY = Math.max(boxStart.y, e.point.y)
-        const hits = map.queryRenderedFeatures(
-          [
-            [minX, minY],
-            [maxX, maxY],
-          ],
-          { layers: featureLayers },
-        )
-        const uniqueIds = Array.from(
-          new Set(hits.map((f) => String(f.id ?? f.properties?.id ?? '')).filter(Boolean)),
-        )
-        onSetSelection(uniqueIds)
-        boxStart = null
-        setCursor('')
-      }
+      handlePointerUp(pointerFromMapEvent(e))
     }
 
     const handleContextMenu = (e: MapMouseEvent) => {
@@ -471,6 +600,7 @@ export function useDrawingEngine({
     map.doubleClickZoom.disable()
 
     return () => {
+      detachWindowListeners()
       map.off('click', handleMapClick)
       map.off('mousedown', handleMouseDown)
       map.off('mousemove', handleMouseMove)
