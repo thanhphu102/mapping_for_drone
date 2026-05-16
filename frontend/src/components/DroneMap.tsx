@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, FeatureCollection, Geometry, Position } from 'geojson'
 import type { GeoJSONSource } from 'maplibre-gl'
-import type { Map } from 'maplibre-gl'
+import type { Map, MapLayerMouseEvent } from 'maplibre-gl'
 import { useDroneMap } from '../hooks/useDroneMap'
 import { useDroneMarkers } from '../hooks/useDroneMarkers'
 import { useProjectedTarget } from '../hooks/useProjectedTarget'
@@ -321,9 +321,8 @@ export function DroneMap({
     () => [...(selectedOverlayProject?.floors ?? [])].sort((a, b) => b.level - a.level),
     [selectedOverlayProject],
   )
-  const nearestFloorProjects = useMemo(() => {
+  const nearestOverlayProjects = useMemo(() => {
     return overlayProjects
-      .filter((project) => project.floors.length > 0)
       .sort((left, right) => {
         const leftDistance = approxDistanceSq(bboxCenter(left.bbox), overlayCenter)
         const rightDistance = approxDistanceSq(bboxCenter(right.bbox), overlayCenter)
@@ -367,11 +366,14 @@ export function DroneMap({
   useEffect(() => {
     if (overlayZoom < floorPanelMinZoom) return
     if (selectedOverlayProjectId) return
-    if (nearestFloorProjects.length === 0) return
-    const first = nearestFloorProjects[0]
-    setSelectedOverlayProjectId(first.id)
-    setSelectedOverlayFloorId(first.floors[0]?.id ?? null)
-  }, [nearestFloorProjects, overlayZoom, selectedOverlayProjectId])
+    if (nearestOverlayProjects.length === 0) return
+    const first = nearestOverlayProjects[0]
+    const timer = window.setTimeout(() => {
+      setSelectedOverlayProjectId(first.id)
+      setSelectedOverlayFloorId(first.floors[0]?.id ?? null)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [nearestOverlayProjects, overlayZoom, selectedOverlayProjectId])
 
   useEffect(() => {
     if (!map) {
@@ -606,7 +608,7 @@ export function DroneMap({
     }
     map.on('moveend', scheduleRefresh)
     map.on('zoomend', scheduleRefresh)
-    const handleBoundaryClick = (event: any) => {
+    const handleBoundaryClick = (event: MapLayerMouseEvent) => {
       const feature = event.features?.[0]
       const projectId = feature?.properties?.projectId
       if (!projectId) return
@@ -647,9 +649,9 @@ export function DroneMap({
     }
   }, [map])
 
-  const handleDeleteIndoorMap = async () => {
+  const handleDeleteOverlayProject = async () => {
     if (!selectedOverlayProject) return
-    const ok = window.confirm(`Delete indoor map "${selectedOverlayProject.name}"?`)
+    const ok = window.confirm(`Delete map "${selectedOverlayProject.name}"?`)
     if (!ok) return
     setIsDeletingOverlayProject(true)
     try {
@@ -665,7 +667,7 @@ export function DroneMap({
       setSelectedOverlayFloorId(null)
       scheduleOverlayRefreshRef.current?.()
     } catch (error) {
-      console.warn('Delete indoor map failed:', error)
+      console.warn('Delete overlay map failed:', error)
     } finally {
       setIsDeletingOverlayProject(false)
     }
@@ -722,12 +724,12 @@ export function DroneMap({
       <div className="pointer-events-none absolute left-4 top-4 z-10 rounded-lg border border-white/20 bg-slate-950/80 px-3 py-2 text-sm text-white shadow-lg backdrop-blur">
         Click map to set target for connected drones
       </div>
-      {overlayZoom >= floorPanelMinZoom && nearestFloorProjects.length > 0 ? (
+      {overlayZoom >= floorPanelMinZoom && nearestOverlayProjects.length > 0 ? (
         <div className="absolute left-4 top-16 z-20 w-72 rounded-lg border border-white/20 bg-slate-950/85 p-2 text-xs text-white shadow-lg backdrop-blur">
-          <div className="mb-1 font-semibold text-sky-200">Indoor Floors</div>
-          <div className="mb-2 text-[11px] text-slate-300">Nearest buildings first</div>
+          <div className="mb-1 font-semibold text-sky-200">Spatial Maps</div>
+          <div className="mb-2 text-[11px] text-slate-300">Nearest maps first</div>
           <div className="max-h-36 space-y-1 overflow-y-auto border-b border-white/10 pb-2">
-            {nearestFloorProjects.map((project) => {
+            {nearestOverlayProjects.map((project) => {
               const active = project.id === selectedOverlayProjectId
               return (
                 <button
@@ -751,14 +753,14 @@ export function DroneMap({
           <div className="mt-2 text-[11px] text-slate-300">
             {selectedOverlayProject ? selectedOverlayProject.name : 'Select a building'}
           </div>
-          {selectedOverlayProject?.parentProjectId ? (
+          {selectedOverlayProject ? (
             <button
               type="button"
               className="mt-1 w-full rounded border border-rose-500/50 bg-rose-500/15 px-2 py-1 text-left text-[11px] text-rose-100 hover:bg-rose-500/25 disabled:opacity-50"
-              onClick={handleDeleteIndoorMap}
+              onClick={handleDeleteOverlayProject}
               disabled={isDeletingOverlayProject}
             >
-              {isDeletingOverlayProject ? 'Deleting...' : 'Delete indoor map'}
+              {isDeletingOverlayProject ? 'Deleting...' : 'Delete map'}
             </button>
           ) : null}
           <div className="mt-1 max-h-44 space-y-1 overflow-y-auto">

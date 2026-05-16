@@ -1,9 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { Feature, FeatureCollection, Geometry } from 'geojson'
-import type { GeoJSONSource, Map } from 'maplibre-gl'
+import type { FilterSpecification, GeoJSONSource, Map } from 'maplibre-gl'
 import type { DrawingProject, ProjectCanvasConfig } from '../types/drone'
 import type { SnapPreview } from './useSnapEngine'
-import type { DrawMode } from './useDrawingEngine'
 
 const boundarySourceId = 'base-boundary'
 const featureSourceId = 'project-features'
@@ -13,14 +12,9 @@ const baseBoundaryOutlineLayerId = 'base-boundary-outline'
 const featureFillLayerId = 'project-features-fill'
 const featureLineLayerId = 'project-features-line'
 const featurePointLayerId = 'project-features-point'
-const draftLineLayerId = 'draft-feature-line'
-const draftPointLayerId = 'draft-feature-point'
 const dimMaskSourceId = 'dim-mask'
 const dimMaskLayerId = 'dim-mask-fill'
 const snapPreviewSourceId = 'snap-preview'
-const snapPreviewLayerId = 'snap-preview-point'
-const selectedVertexSourceId = 'selected-feature-vertex-source'
-const selectedVertexLayerId = 'selected-feature-vertex'
 
 function mapReadyForStyle(map: Map, mapLoaded: boolean) {
   return mapLoaded && map.isStyleLoaded()
@@ -79,36 +73,6 @@ function boundaryBBox(project: DrawingProject): [number, number, number, number]
   return project.bbox
 }
 
-function selectedVertexFeatures(visibleFeatures: Feature[], selectedFeatureIds: string[]): Feature[] {
-  if (selectedFeatureIds.length !== 1) return []
-  const targetId = selectedFeatureIds[0]
-  const selected = visibleFeatures.find((feature) => String(feature.id ?? feature.properties?.id ?? '') === targetId)
-  if (!selected?.geometry) return []
-  if (selected.geometry.type === 'Point') {
-    return [{
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: selected.geometry.coordinates },
-      properties: { featureId: targetId, vertexIndex: 0 },
-    } as Feature]
-  }
-  if (selected.geometry.type === 'LineString') {
-    return selected.geometry.coordinates.map((coordinate, index) => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: coordinate },
-      properties: { featureId: targetId, vertexIndex: index },
-    } as Feature))
-  }
-  if (selected.geometry.type === 'Polygon') {
-    const ring = selected.geometry.coordinates[0] ?? []
-    return ring.slice(0, -1).map((coordinate, index) => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: coordinate },
-      properties: { featureId: targetId, vertexIndex: index },
-    } as Feature))
-  }
-  return []
-}
-
 interface UseMapRendererOptions {
   map: Map | null
   mapReady: boolean
@@ -118,7 +82,6 @@ interface UseMapRendererOptions {
   projectConfig: ProjectCanvasConfig
   visibleFeatures: Feature[]
   selectedFeatureIds: string[]
-  activeMode: DrawMode
   draftCollection: GeoJSON.FeatureCollection | null
   snapPreview: SnapPreview | null
   isMounted: () => boolean
@@ -135,7 +98,6 @@ export function useMapRenderer({
   projectConfig,
   visibleFeatures,
   selectedFeatureIds,
-  activeMode,
   draftCollection,
   snapPreview,
   isMounted,
@@ -168,12 +130,6 @@ export function useMapRenderer({
         ]
         : [],
     )
-    const selectedVertexCollection = featureCollection(
-      activeMode === 'edit_points'
-        ? selectedVertexFeatures(visibleFeatures, selectedFeatureIds)
-        : [],
-    )
-
     // --- Sources ---
     if (!getSourceSafe(map, boundarySourceId)) {
       map.addSource(boundarySourceId, { type: 'geojson', data: baseCollection })
@@ -214,12 +170,6 @@ export function useMapRenderer({
       getSourceSafe(map, snapPreviewSourceId)?.setData(snapCollection)
     }
 
-    if (!getSourceSafe(map, selectedVertexSourceId)) {
-      map.addSource(selectedVertexSourceId, { type: 'geojson', data: selectedVertexCollection })
-    } else {
-      getSourceSafe(map, selectedVertexSourceId)?.setData(selectedVertexCollection)
-    }
-
     // --- Layers ---
     if (projectConfig.canvasMode === 'dimOutside' && !map.getLayer(dimMaskLayerId)) {
       map.addLayer({
@@ -244,7 +194,7 @@ export function useMapRenderer({
         id: baseBoundaryOutlineLayerId,
         type: 'line',
         source: boundarySourceId,
-        paint: { 'line-color': '#0369a1', 'line-width': 3 },
+        paint: { 'line-color': '#0369a1', 'line-opacity': 1, 'line-width': 3 },
       })
     }
 
@@ -255,7 +205,7 @@ export function useMapRenderer({
         source: featureSourceId,
         minzoom: project.boundaryMinZoom,
         filter: ['==', ['geometry-type'], 'Polygon'],
-        paint: { 'fill-color': '#16a34a', 'fill-opacity': 0.2 },
+        paint: { 'fill-color': '#16a34a', 'fill-opacity': 0 },
       })
     }
 
@@ -265,7 +215,7 @@ export function useMapRenderer({
         type: 'line',
         source: featureSourceId,
         minzoom: project.boundaryMinZoom,
-        paint: { 'line-color': '#15803d', 'line-width': 3 },
+        paint: { 'line-color': '#15803d', 'line-opacity': 0, 'line-width': 3 },
       })
     }
 
@@ -276,52 +226,8 @@ export function useMapRenderer({
         source: featureSourceId,
         paint: {
           'line-color': '#38bdf8',
+          'line-opacity': 0,
           'line-width': 4,
-        },
-      })
-    }
-
-    if (!map.getLayer('project-features-label')) {
-      map.addLayer({
-        id: 'project-features-label',
-        type: 'symbol',
-        source: featureSourceId,
-        minzoom: project.detailMinZoom,
-        filter: ['!=', ['get', 'featureType'], 'text_label'],
-        layout: {
-          'text-field': ['coalesce', ['get', 'tag'], ['get', 'name'], ['get', 'featureType']],
-          'text-size': 11,
-          'text-offset': [0, 1.1],
-          'text-anchor': 'top',
-        },
-        paint: {
-          'text-color': '#dbeafe',
-          'text-halo-color': '#0f172a',
-          'text-halo-width': 1.2,
-        },
-      })
-    }
-
-    if (!map.getLayer('project-text-label')) {
-      map.addLayer({
-        id: 'project-text-label',
-        type: 'symbol',
-        source: featureSourceId,
-        minzoom: project.boundaryMinZoom,
-        filter: ['==', ['get', 'featureType'], 'text_label'],
-        layout: {
-          'text-field': ['coalesce', ['get', 'text'], ['get', 'name'], ['get', 'tag'], 'Text'],
-          'text-size': 14,
-          'text-anchor': 'center',
-          'text-justify': 'center',
-          'text-max-width': 20,
-          'text-allow-overlap': true,
-          'text-ignore-placement': true,
-        },
-        paint: {
-          'text-color': '#0f172a',
-          'text-halo-color': '#ffffff',
-          'text-halo-width': 1.2,
         },
       })
     }
@@ -339,86 +245,9 @@ export function useMapRenderer({
         ],
         paint: {
           'circle-color': '#15803d',
+          'circle-opacity': 0,
+          'circle-stroke-opacity': 0,
           'circle-radius': 6,
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 2,
-        },
-      })
-    }
-
-    if (!map.getLayer(snapPreviewLayerId)) {
-      map.addLayer({
-        id: snapPreviewLayerId,
-        type: 'circle',
-        source: snapPreviewSourceId,
-        minzoom: projectConfig.precisionZoom,
-        paint: {
-          'circle-color': '#f97316',
-          'circle-radius': 6,
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 2,
-        },
-      })
-    }
-
-    if (!map.getLayer('draft-feature-fill')) {
-      map.addLayer({
-        id: 'draft-feature-fill',
-        type: 'fill',
-        source: draftSourceId,
-        filter: ['==', ['geometry-type'], 'Polygon'],
-        paint: { 'fill-color': '#f97316', 'fill-opacity': 0.15 },
-      })
-    }
-
-    if (!map.getLayer(draftLineLayerId)) {
-      map.addLayer({
-        id: draftLineLayerId,
-        type: 'line',
-        source: draftSourceId,
-        filter: ['==', ['geometry-type'], 'LineString'],
-        paint: { 'line-color': '#f97316', 'line-width': 3, 'line-dasharray': [2, 1] },
-      })
-    }
-
-    if (!map.getLayer(draftPointLayerId)) {
-      map.addLayer({
-        id: draftPointLayerId,
-        type: 'circle',
-        source: draftSourceId,
-        filter: ['==', ['geometry-type'], 'Point'],
-        paint: {
-          'circle-color': '#f97316',
-          'circle-radius': 5,
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 2,
-        },
-      })
-    }
-
-    if (!map.getLayer('draft-feature-vertex')) {
-      map.addLayer({
-        id: 'draft-feature-vertex',
-        type: 'circle',
-        source: draftSourceId,
-        filter: ['==', ['geometry-type'], 'MultiPoint'],
-        paint: {
-          'circle-color': '#ffffff',
-          'circle-radius': 4,
-          'circle-stroke-color': '#f97316',
-          'circle-stroke-width': 2,
-        },
-      })
-    }
-
-    if (!map.getLayer(selectedVertexLayerId)) {
-      map.addLayer({
-        id: selectedVertexLayerId,
-        type: 'circle',
-        source: selectedVertexSourceId,
-        paint: {
-          'circle-color': '#38bdf8',
-          'circle-radius': 5,
           'circle-stroke-color': '#ffffff',
           'circle-stroke-width': 2,
         },
@@ -448,7 +277,7 @@ export function useMapRenderer({
         onMessage('Base boundary rendered')
       }
     })
-  }, [activeMode, draftCollection, mapReady, mapLoaded, project, projectConfig.precisionZoom, snapPreview, visibleFeatures, selectedFeatureIds, map, isMounted, onBoundaryRendered, onMessage])
+  }, [draftCollection, mapReady, mapLoaded, project, projectConfig.canvasMode, snapPreview, visibleFeatures, selectedFeatureIds, map, isMounted, onBoundaryRendered, onMessage])
 
   useEffect(() => {
     if (!map || !project || !mapReadyForStyle(map, mapLoaded)) return
@@ -457,7 +286,7 @@ export function useMapRenderer({
       ? ['in', ['to-string', ['id']], ['literal', selectedFeatureIds]]
       : ['==', ['geometry-type'], 'GeometryCollection']
     if (map.getLayer('project-features-selected-outline')) {
-      map.setFilter('project-features-selected-outline', filter as any)
+      map.setFilter('project-features-selected-outline', filter as FilterSpecification)
     }
   }, [map, mapLoaded, project, selectedFeatureIds])
 
@@ -477,26 +306,5 @@ export function useMapRenderer({
       map.setPaintProperty('osm', 'raster-opacity', isPrecision ? 0.3 : 1)
     }
 
-    // Show vertex handles on features at precision zoom
-    const vertexHandleLayerId = 'feature-vertex-handles'
-    if (isPrecision) {
-      if (!map.getLayer(vertexHandleLayerId) && getSourceSafe(map, featureSourceId)) {
-        map.addLayer({
-          id: vertexHandleLayerId,
-          type: 'circle',
-          source: featureSourceId,
-          paint: {
-            'circle-color': '#f97316',
-            'circle-radius': 4,
-            'circle-stroke-color': '#ffffff',
-            'circle-stroke-width': 1.5,
-          },
-        })
-      }
-    } else {
-      if (map.getLayer(vertexHandleLayerId)) {
-        map.removeLayer(vertexHandleLayerId)
-      }
-    }
   }, [map, mapLoaded, project, projectConfig.precisionZoom, mapReady, mapZoom])
 }

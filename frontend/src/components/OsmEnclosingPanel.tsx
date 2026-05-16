@@ -60,6 +60,10 @@ export function OsmEnclosingPanel({
   onOpenSpatialEditor,
   onClose,
 }: OsmEnclosingPanelProps) {
+  const selectedKey = selectedCandidate ? `${selectedCandidate.type}-${selectedCandidate.id}` : null
+  const isSelectedLoading = selectedCandidate && status?.tone === 'info' && !selectedGeometry
+  const isSelectedError = selectedCandidate && status?.tone === 'error' && !selectedGeometry
+
   return (
     <section className="flex h-full min-h-0 flex-col bg-white">
       <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
@@ -97,6 +101,7 @@ export function OsmEnclosingPanel({
         {candidates.length > 0 ? (
           <ul className="space-y-2 pr-1">
             {candidates.map((candidate) => {
+              const candidateKey = `${candidate.type}-${candidate.id}`
               const isSelected =
                 selectedCandidate?.id === candidate.id &&
                 selectedCandidate.type === candidate.type
@@ -105,7 +110,7 @@ export function OsmEnclosingPanel({
                 highlightedCandidate.type === candidate.type
 
               return (
-                <li key={`${candidate.type}-${candidate.id}`}>
+                <li key={candidateKey}>
                   <button
                     type="button"
                     className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
@@ -127,6 +132,98 @@ export function OsmEnclosingPanel({
                     </div>
                     <div className="text-slate-500">{candidate.category}</div>
                   </button>
+                  {isSelected ? (
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      {isSelectedLoading ? (
+                        <p className="flex items-center gap-2 text-xs text-slate-500">
+                          <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                          Building boundary...
+                        </p>
+                      ) : null}
+                      {isSelectedError ? (
+                        <p className={`rounded-md border px-2 py-1.5 text-xs ${toneClassName.error}`}>
+                          {status?.text ?? 'Unable to load boundary'}
+                        </p>
+                      ) : null}
+                      {selectedKey === candidateKey && selectedGeometry ? (
+                        <>
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-xs font-semibold uppercase text-slate-500">
+                                Detected mode
+                              </div>
+                              <div className="mt-1 text-sm font-semibold capitalize text-slate-950">
+                                {selectedEditorMode ?? selectedGeometry.editorMode}
+                              </div>
+                            </div>
+                            <div className="rounded-md bg-white px-2 py-1 text-xs font-medium text-slate-600">
+                              {selectedGeometry.areaSquareKm.toFixed(3)} km2
+                            </div>
+                          </div>
+                          <div className="mt-2 space-y-1 text-xs text-slate-600">
+                            <div>
+                              <span className="font-semibold text-slate-700">Reason:</span>{' '}
+                              {selectedGeometry.classification.reason}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-slate-700">Boundary:</span>{' '}
+                              {candidate.type} {candidate.id}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-slate-700">Perimeter:</span>{' '}
+                              {(selectedGeometry.perimeterM / 1000).toFixed(2)} km
+                            </div>
+                          </div>
+                          {selectedGeometry.warnings.length > 0 ? (
+                            <div className="mt-2 space-y-2">
+                              {selectedGeometry.warnings.map((warning) => (
+                                <p
+                                  key={warning}
+                                  className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800"
+                                >
+                                  {warning}
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="mt-3">
+                            <div className="text-xs font-semibold uppercase text-slate-500">
+                              Change mode
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {editorModes.map((mode) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  className={`rounded-md border px-2.5 py-1 text-xs font-medium capitalize transition ${
+                                    (selectedEditorMode ?? selectedGeometry.editorMode) === mode
+                                      ? 'border-slate-950 bg-slate-950 text-white'
+                                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                                  }`}
+                                  onClick={() => onChangeEditorMode(mode)}
+                                >
+                                  {mode}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+                            onClick={onOpenSpatialEditor}
+                            disabled={isOpeningEditor}
+                          >
+                            {isOpeningEditor ? (
+                              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                            ) : (
+                              <PencilRuler className="size-4" aria-hidden="true" />
+                            )}
+                            {confirmedLargeArea ? 'Confirm Large Area And Open Editor' : 'Open Spatial Editor'}
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </li>
               )
             })}
@@ -136,84 +233,6 @@ export function OsmEnclosingPanel({
             <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
             Waiting for enclosing elements...
           </p>
-        ) : null}
-
-        {selectedCandidate && selectedGeometry ? (
-          <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-semibold uppercase text-slate-500">
-                  Detected mode
-                </div>
-                <div className="mt-1 text-sm font-semibold capitalize text-slate-950">
-                  {selectedEditorMode ?? selectedGeometry.editorMode}
-                </div>
-              </div>
-              <div className="rounded-md bg-white px-2 py-1 text-xs font-medium text-slate-600">
-                {selectedGeometry.areaSquareKm.toFixed(3)} km²
-              </div>
-            </div>
-            <div className="mt-2 space-y-1 text-xs text-slate-600">
-              <div>
-                <span className="font-semibold text-slate-700">Reason:</span>{' '}
-                {selectedGeometry.classification.reason}
-              </div>
-              <div>
-                <span className="font-semibold text-slate-700">Boundary:</span>{' '}
-                {selectedCandidate.type} {selectedCandidate.id}
-              </div>
-              <div>
-                <span className="font-semibold text-slate-700">Perimeter:</span>{' '}
-                {(selectedGeometry.perimeterM / 1000).toFixed(2)} km
-              </div>
-            </div>
-            {selectedGeometry.warnings.length > 0 ? (
-              <div className="mt-2 space-y-2">
-                {selectedGeometry.warnings.map((warning) => (
-                  <p
-                    key={warning}
-                    className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800"
-                  >
-                    {warning}
-                  </p>
-                ))}
-              </div>
-            ) : null}
-            <div className="mt-3">
-              <div className="text-xs font-semibold uppercase text-slate-500">
-                Change mode
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {editorModes.map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`rounded-md border px-2.5 py-1 text-xs font-medium capitalize transition ${
-                      (selectedEditorMode ?? selectedGeometry.editorMode) === mode
-                        ? 'border-slate-950 bg-slate-950 text-white'
-                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
-                    }`}
-                    onClick={() => onChangeEditorMode(mode)}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button
-              type="button"
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
-              onClick={onOpenSpatialEditor}
-              disabled={isOpeningEditor}
-            >
-              {isOpeningEditor ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <PencilRuler className="size-4" aria-hidden="true" />
-              )}
-              {confirmedLargeArea ? 'Confirm Large Area And Open Editor' : 'Open Spatial Editor'}
-            </button>
-          </section>
         ) : null}
       </div>
     </section>

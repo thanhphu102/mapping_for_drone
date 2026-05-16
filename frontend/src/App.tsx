@@ -14,6 +14,7 @@ import {
 } from './services/osm'
 import {
   createDrawingProjectFromOsm,
+  fetchDrawingProjects,
   fetchOsmElementGeometry,
 } from './services/spatial'
 import type {
@@ -322,11 +323,28 @@ function App() {
       ...current,
       message: {
         tone: 'info',
-        text: 'Creating drawing project...',
+        text: 'Checking existing drawing project...',
       },
     }))
 
     try {
+      const existingProjects = await fetchDrawingProjects({
+        osmType: candidate.type,
+        osmId: candidate.id,
+      })
+      if (existingProjects.length > 0) {
+        const existing = existingProjects[0]
+        window.location.assign(`/spatial-editor/${existing.id}`)
+        return
+      }
+
+      setLocationFetch((current) => ({
+        ...current,
+        message: {
+          tone: 'info',
+          text: 'Creating drawing project...',
+        },
+      }))
       const response = await createDrawingProjectFromOsm(
         candidate.type,
         candidate.id,

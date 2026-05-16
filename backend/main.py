@@ -1309,6 +1309,28 @@ async def import_spatial_project_geojson(payload: ImportGeoJsonProjectRequest):
     }
 
 
+@app.get("/api/drawing-projects")
+async def list_drawing_projects(
+    parentProjectId: str | None = None,
+    osmType: OsmType | None = None,
+    osmId: int | None = None,
+):
+    data = load_projects()
+    projects = data.get("projects") if isinstance(data.get("projects"), list) else []
+    filtered_projects: List[Dict[str, Any]] = []
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        if parentProjectId is not None and str(project.get("parentProjectId") or "") != parentProjectId:
+            continue
+        if osmType is not None and str(project.get("osmType") or "") != osmType:
+            continue
+        if osmId is not None and int(project.get("osmId") or -1) != osmId:
+            continue
+        filtered_projects.append(project)
+    return {"projects": filtered_projects}
+
+
 @app.get("/api/drawing-projects/{project_id}")
 async def get_drawing_project(project_id: str):
     project = await get_project_record(project_id)

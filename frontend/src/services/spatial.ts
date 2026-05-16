@@ -99,6 +99,27 @@ export async function fetchDrawingProject(
   return readJsonResponse<DrawingProject>(response)
 }
 
+export async function fetchDrawingProjects(filters?: {
+  parentProjectId?: string
+  osmType?: OsmElementType
+  osmId?: number
+}): Promise<DrawingProject[]> {
+  const params = new URLSearchParams()
+  if (filters?.parentProjectId) {
+    params.set('parentProjectId', filters.parentProjectId)
+  }
+  if (filters?.osmType) {
+    params.set('osmType', filters.osmType)
+  }
+  if (typeof filters?.osmId === 'number') {
+    params.set('osmId', String(filters.osmId))
+  }
+  const query = params.toString()
+  const response = await fetch(`/api/drawing-projects${query ? `?${query}` : ''}`)
+  const data = await readJsonResponse<{ projects: DrawingProject[] }>(response)
+  return data.projects
+}
+
 export async function fetchDrawingProjectFeatures(
   projectId: string,
   signal?: AbortSignal,
@@ -278,7 +299,5 @@ export async function createChildProject(
 export async function fetchChildProjects(
   projectId: string,
 ): Promise<DrawingProject[]> {
-  const response = await fetch(`/api/drawing-projects?parentProjectId=${projectId}`)
-  const data = await readJsonResponse<{ projects: DrawingProject[] }>(response)
-  return data.projects
+  return fetchDrawingProjects({ parentProjectId: projectId })
 }

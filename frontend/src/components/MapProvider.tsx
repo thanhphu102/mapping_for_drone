@@ -50,7 +50,7 @@ export function MapProvider({ children }: MapProviderProps) {
   const mapInstanceRef = useRef<Map | null>(null)
   const containerNodeRef = useRef<HTMLDivElement | null>(null)
   const mapLoadedRef = useRef(false)
-  const isMountedRef = useRef(false)
+  const isMountedRef = useRef(true)
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const [mapInstance, setMapInstance] = useState<Map | null>(null)
 
@@ -89,11 +89,9 @@ export function MapProvider({ children }: MapProviderProps) {
       const handleLoad = () => {
         mapLoadedRef.current = true
         map.resize()
-        if (isMountedRef.current) {
-          setMapLoaded(true)
-          setMapReady(true)
-          setMapZoom(map.getZoom())
-        }
+        setMapLoaded(true)
+        setMapReady(true)
+        setMapZoom(map.getZoom())
       }
 
       const handleError = (event: unknown) => {
@@ -127,8 +125,8 @@ export function MapProvider({ children }: MapProviderProps) {
 
       map.on('load', handleLoad)
       map.on('error', handleError)
-      map.on('moveend', handleViewChange)
-      map.on('zoomend', handleViewChange)
+      map.on('move', handleViewChange)
+      map.on('zoom', handleViewChange)
       map.getCanvas().addEventListener('webglcontextlost', handleContextLost)
       map.getCanvas().addEventListener('webglcontextrestored', handleContextRestored)
 

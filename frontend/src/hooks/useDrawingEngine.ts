@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react'
-import type { Feature, FeatureCollection, Position } from 'geojson'
-import type { Map } from 'maplibre-gl'
+import type { Feature, FeatureCollection, Geometry, Position } from 'geojson'
+import type { Map, MapMouseEvent } from 'maplibre-gl'
 import type { DrawingProject } from '../types/drone'
 import type { SnapPreview } from './useSnapEngine'
+
+const featureLayers = ['project-features-fill', 'project-features-line', 'project-features-point']
 
 export type DrawMode =
   | 'select'
   | 'move'
-  | 'edit_points'
   | 'text'
   | 'pen'
   | 'point'
@@ -45,8 +46,11 @@ function pointInBoundary(point: Position, project: DrawingProject) {
   })
 }
 
-function translateGeometry(geometry: any, deltaLng: number, deltaLat: number) {
-  if (!geometry || !geometry.type) return geometry
+function translatePosition([lng, lat]: Position, deltaLng: number, deltaLat: number): Position {
+  return [lng + deltaLng, lat + deltaLat]
+}
+
+function translateGeometry(geometry: Geometry, deltaLng: number, deltaLat: number): Geometry {
   if (geometry.type === 'Point') {
     const [lng, lat] = geometry.coordinates
     return { ...geometry, coordinates: [lng + deltaLng, lat + deltaLat] }
@@ -54,13 +58,43 @@ function translateGeometry(geometry: any, deltaLng: number, deltaLat: number) {
   if (geometry.type === 'LineString') {
     return {
       ...geometry,
-      coordinates: geometry.coordinates.map(([lng, lat]: Position) => [lng + deltaLng, lat + deltaLat]),
+      coordinates: geometry.coordinates.map((position) => translatePosition(position, deltaLng, deltaLat)),
+    }
+  }
+  if (geometry.type === 'MultiLineString') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((line) =>
+        line.map((position) => translatePosition(position, deltaLng, deltaLat)),
+      ),
     }
   }
   if (geometry.type === 'Polygon') {
     return {
       ...geometry,
-      coordinates: geometry.coordinates.map((ring: Position[]) => ring.map(([lng, lat]) => [lng + deltaLng, lat + deltaLat])),
+      coordinates: geometry.coordinates.map((ring) =>
+        ring.map((position) => translatePosition(position, deltaLng, deltaLat)),
+      ),
+    }
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((polygon) =>
+        polygon.map((ring) => ring.map((position) => translatePosition(position, deltaLng, deltaLat))),
+      ),
+    }
+  }
+  if (geometry.type === 'MultiPoint') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((position) => translatePosition(position, deltaLng, deltaLat)),
+    }
+  }
+  if (geometry.type === 'GeometryCollection') {
+    return {
+      ...geometry,
+      geometries: geometry.geometries.map((child) => translateGeometry(child, deltaLng, deltaLat)),
     }
   }
   return geometry
@@ -73,16 +107,17 @@ interface UseDrawingEngineOptions {
   isMounted: () => boolean
   modeRef: React.RefObject<DrawMode>
   snapPreviewRef: React.RefObject<SnapPreview | null>
-  draftPointsRef: React.RefObject<Position[]>
   selectedFeatureIdsRef: React.RefObject<string[]>
   onAddPoint: (updater: (current: Position[]) => Position[]) => void
   onSaveDraft: () => void
   onMessage: (msg: string) => void
   onSetSelection: (featureIds: string[]) => void
   onDeleteFeatures?: (featureIds: string[]) => void
-  onMoveVertex?: (featureId: string, vertexIndex: number, lng: number, lat: number) => void
-  onMoveVertexEnd?: () => void
+  onMoveFeatures?: (featureIds: string[], deltaLng: number, deltaLat: number) => void
+  onMoveEnd?: (featureIds: string[]) => void
   onQuickCreateTextBox?: (start: Position, end: Position) => void
+  onCommitBoxShape?: (mode: 'rectangle' | 'square' | 'triangle' | 'ellipse', start: Position, end: Position) => void
+  onCommitPenPath?: (points: Position[]) => void
 }
 
 export function useDrawingEngine({
@@ -92,16 +127,17 @@ export function useDrawingEngine({
   isMounted,
   modeRef,
   snapPreviewRef,
-  draftPointsRef,
   selectedFeatureIdsRef,
   onAddPoint,
   onSaveDraft,
   onMessage,
   onSetSelection,
   onDeleteFeatures,
-  onMoveVertex,
-  onMoveVertexEnd,
+  onMoveFeatures,
+  onMoveEnd,
   onQuickCreateTextBox,
+  onCommitBoxShape,
+  onCommitPenPath,
 }: UseDrawingEngineOptions) {
   const projectRef = useRef(project)
   const toolsEnabledRef = useRef(toolsEnabled)
@@ -119,13 +155,11 @@ export function useDrawingEngine({
     onSaveDraftRef.current = onSaveDraft
   }, [onSaveDraft])
 
-  const featureLayers = ['project-features-fill', 'project-features-line', 'project-features-point']
-
   const suppressClickRef = useRef(false)
   const constrainSquareByPixels = useCallback((start: Position, rawEnd: Position): Position => {
     if (!map) return rawEnd
-    const startPx = map.project(start as any)
-    const endPx = map.project(rawEnd as any)
+    const startPx = map.project([start[0], start[1]])
+    const endPx = map.project([rawEnd[0], rawEnd[1]])
     const dx = endPx.x - startPx.x
     const dy = endPx.y - startPx.y
     const side = Math.min(Math.abs(dx), Math.abs(dy))
@@ -133,12 +167,12 @@ export function useDrawingEngine({
       x: startPx.x + Math.sign(dx || 1) * side,
       y: startPx.y + Math.sign(dy || 1) * side,
     }
-    const unprojected = map.unproject(constrainedPx as any)
+    const unprojected = map.unproject([constrainedPx.x, constrainedPx.y])
     return [unprojected.lng, unprojected.lat]
   }, [map])
 
   const handleMapClick = useCallback(
-    (event: any) => {
+    (event: MapMouseEvent) => {
       if (!toolsEnabledRef.current || !map) return
       if (suppressClickRef.current) {
         suppressClickRef.current = false
@@ -154,7 +188,7 @@ export function useDrawingEngine({
         return
       }
 
-      if (currentMode === 'select' || currentMode === 'edit_points') {
+      if (currentMode === 'select') {
         if (firstId) {
           if (event.originalEvent?.shiftKey) {
             const currentIds = selectedFeatureIdsRef.current ?? []
@@ -170,9 +204,6 @@ export function useDrawingEngine({
         }
         return
       }
-
-      const draftVertexHits = map.queryRenderedFeatures(event.point, { layers: ['draft-feature-vertex'] })
-      if (draftVertexHits.length > 0) return
 
       onAddPoint((current) => {
         const currentProject = projectRef.current
@@ -197,19 +228,19 @@ export function useDrawingEngine({
   useEffect(() => {
     if (!map) return
 
-    let draggingVertexIndex: number | null = null
     let boxStart: { x: number; y: number } | null = null
-    let movingVertex: { featureId: string; vertexIndex: number } | null = null
+    let movingFeatures: { featureIds: string[]; lastLng: number; lastLat: number; moved: boolean } | null = null
     let boxShapeStart: Position | null = null
-    let shapeConstraintShift = false
     let freehandStarted = false
+    let freehandPoints: Position[] = []
     let lassoStarted = false
+    let lassoStart: Position | null = null
 
     const setCursor = (value: string) => {
       map.getCanvas().style.cursor = value
     }
 
-    const handleMouseDown = (e: any) => {
+    const handleMouseDown = (e: MapMouseEvent) => {
       if (!toolsEnabledRef.current) return
       const mode = modeRef.current
 
@@ -217,7 +248,6 @@ export function useDrawingEngine({
         if (e.originalEvent.button !== 0) return
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
         boxShapeStart = start
-        shapeConstraintShift = Boolean(e.originalEvent.shiftKey)
         onAddPoint(() => [start, start])
         map.dragPan.disable()
         setCursor('crosshair')
@@ -227,6 +257,7 @@ export function useDrawingEngine({
       if (mode === 'pen') {
         if (e.originalEvent.button !== 0) return
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
+        freehandPoints = [start]
         onAddPoint(() => [start])
         freehandStarted = true
         map.dragPan.disable()
@@ -237,31 +268,12 @@ export function useDrawingEngine({
       if (mode === 'delete_lasso') {
         if (e.originalEvent.button !== 0) return
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
-        onAddPoint(() => [start])
+        lassoStart = start
+        onAddPoint(() => [start, start])
         lassoStarted = true
         map.dragPan.disable()
         setCursor('crosshair')
         return
-      }
-
-      if (mode === 'edit_points') {
-        const vertexHits = map.queryRenderedFeatures(
-          [
-            [e.point.x - 8, e.point.y - 8],
-            [e.point.x + 8, e.point.y + 8],
-          ],
-          { layers: ['selected-feature-vertex'] },
-        )
-        const vertex = vertexHits.find((feature) => feature.properties?.featureId && Number.isFinite(Number(feature.properties?.vertexIndex)))
-        if (vertex && onMoveVertex) {
-          movingVertex = {
-            featureId: String(vertex.properties?.featureId),
-            vertexIndex: Number(vertex.properties?.vertexIndex),
-          }
-          setCursor('grabbing')
-          map.dragPan.disable()
-          return
-        }
       }
 
       if (mode === 'move') {
@@ -275,53 +287,35 @@ export function useDrawingEngine({
         return
       }
 
-      const currentPoints = draftPointsRef.current ?? []
-      if (currentPoints.length === 0 || mode !== 'edit_points') return
-
-      let closestIndex = -1
-      let minDist = Infinity
-      currentPoints.forEach((pt, i) => {
-        const screenPt = map.project(pt as any)
-        const dist = Math.hypot(screenPt.x - e.point.x, screenPt.y - e.point.y)
-        if (dist < 15 && dist < minDist) {
-          minDist = dist
-          closestIndex = i
+      if (mode === 'select') {
+        const featureHits = map.queryRenderedFeatures(e.point, { layers: featureLayers })
+        const firstFeature = featureHits.find((feature) => feature.id || feature.properties?.id)
+        const firstId = String(firstFeature?.id ?? firstFeature?.properties?.id ?? '')
+        if (firstId) {
+          const currentSelection = selectedFeatureIdsRef.current ?? []
+          const featureIds = currentSelection.includes(firstId) ? currentSelection : [firstId]
+          onSetSelection(featureIds)
+          movingFeatures = {
+            featureIds,
+            lastLng: e.lngLat.lng,
+            lastLat: e.lngLat.lat,
+            moved: false,
+          }
+          map.dragPan.disable()
+          setCursor('grabbing')
+          return
         }
-      })
-
-      if (closestIndex === -1) return
-
-      if (e.originalEvent.altKey || e.originalEvent.button === 2) {
-        e.preventDefault()
-        onAddPoint((cur) => cur.filter((_, idx) => idx !== closestIndex))
-        return
       }
 
-      if (e.originalEvent.button === 0) {
-        e.preventDefault()
-        draggingVertexIndex = closestIndex
-        setCursor('grabbing')
-        map.dragPan.disable()
-      }
     }
 
-    const handleMouseMove = (e: any) => {
-      if (draggingVertexIndex !== null) {
-        const point: Position = snapPreviewRef.current?.point ?? [e.lngLat.lng, e.lngLat.lat]
-        onAddPoint((cur) => {
-          const next = [...cur]
-          next[draggingVertexIndex!] = point
-          return next
-        })
-        return
-      }
-
+    const handleMouseMove = (e: MapMouseEvent) => {
       if (boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
-        shapeConstraintShift = Boolean(e.originalEvent?.shiftKey)
         const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
         const mode = modeRef.current
+        const shiftPressed = Boolean(e.originalEvent?.shiftKey)
         const end: Position =
-          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shapeConstraintShift
+          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shiftPressed
             ? constrainSquareByPixels(boxShapeStart!, rawEnd)
             : rawEnd
         onAddPoint(() => [boxShapeStart!, end])
@@ -330,13 +324,7 @@ export function useDrawingEngine({
 
       if (lassoStarted && modeRef.current === 'delete_lasso') {
         const point: Position = [e.lngLat.lng, e.lngLat.lat]
-        onAddPoint((cur) => {
-          if (cur.length === 0) return [point]
-          const last = cur[cur.length - 1]
-          const d = Math.hypot(point[0] - last[0], point[1] - last[1])
-          if (d < 0.000005) return cur
-          return [...cur, point]
-        })
+        onAddPoint(() => [lassoStart ?? point, point])
         return
       }
 
@@ -347,44 +335,50 @@ export function useDrawingEngine({
           const last = cur[cur.length - 1]
           const d = Math.hypot(point[0] - last[0], point[1] - last[1])
           if (d < 0.00001) return cur
+          freehandPoints = [...cur, point]
           return [...cur, point]
         })
         return
       }
 
-      if (movingVertex && onMoveVertex) {
-        onMoveVertex(movingVertex.featureId, movingVertex.vertexIndex, e.lngLat.lng, e.lngLat.lat)
+      if (movingFeatures && onMoveFeatures) {
+        const deltaLng = e.lngLat.lng - movingFeatures.lastLng
+        const deltaLat = e.lngLat.lat - movingFeatures.lastLat
+        if (Math.abs(deltaLng) > 0 || Math.abs(deltaLat) > 0) {
+          onMoveFeatures(movingFeatures.featureIds, deltaLng, deltaLat)
+          movingFeatures.lastLng = e.lngLat.lng
+          movingFeatures.lastLat = e.lngLat.lat
+          movingFeatures.moved = true
+        }
         return
       }
 
     }
 
-    const handleMouseUp = (e: any) => {
-      if (draggingVertexIndex !== null) {
-        draggingVertexIndex = null
+    const handleMouseUp = (e: MapMouseEvent) => {
+      if (movingFeatures) {
+        const movedFeatureIds = movingFeatures.featureIds
+        const didMove = movingFeatures.moved
+        movingFeatures = null
         setCursor('')
         map.dragPan.disable()
-      }
-
-      if (movingVertex) {
-        movingVertex = null
-        setCursor('')
-        map.dragPan.disable()
-        onMoveVertexEnd?.()
+        if (didMove) {
+          suppressClickRef.current = true
+          onMoveEnd?.(movedFeatureIds)
+        }
       }
 
       if (boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
         const start = boxShapeStart
-        const constrain = shapeConstraintShift
         boxShapeStart = null
-        shapeConstraintShift = false
         setCursor('')
         map.dragPan.disable()
         suppressClickRef.current = true
         const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
         const mode = modeRef.current
+        const shiftPressed = Boolean(e.originalEvent?.shiftKey)
         const end: Position =
-          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && constrain
+          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shiftPressed
             ? constrainSquareByPixels(start, rawEnd)
             : rawEnd
         const d = Math.hypot(end[0] - start[0], end[1] - start[1])
@@ -392,6 +386,9 @@ export function useDrawingEngine({
           onAddPoint(() => [start, end])
           if (mode === 'text') {
             onQuickCreateTextBox?.(start, end)
+            onAddPoint(() => [])
+          } else if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse') {
+            onCommitBoxShape?.(mode, start, end)
             onAddPoint(() => [])
           } else {
             onSaveDraftRef.current()
@@ -406,11 +403,18 @@ export function useDrawingEngine({
         setCursor('')
         map.dragPan.disable()
         suppressClickRef.current = true
-        onSaveDraftRef.current()
+        if (freehandPoints.length >= 2) {
+          onCommitPenPath?.(freehandPoints)
+          onAddPoint(() => [])
+        } else {
+          onSaveDraftRef.current()
+        }
+        freehandPoints = []
       }
 
       if (lassoStarted && modeRef.current === 'delete_lasso') {
         lassoStarted = false
+        lassoStart = null
         setCursor('')
         map.dragPan.disable()
         suppressClickRef.current = true
@@ -438,7 +442,7 @@ export function useDrawingEngine({
       }
     }
 
-    const handleContextMenu = (e: any) => {
+    const handleContextMenu = (e: MapMouseEvent) => {
       const hits = map.queryRenderedFeatures(e.point, { layers: featureLayers })
       const first = hits.find((f) => f.id || f.properties?.id)
       const firstId = first?.id ?? first?.properties?.id
@@ -448,19 +452,16 @@ export function useDrawingEngine({
         return
       }
 
-      const vertexHits = map.queryRenderedFeatures(e.point, { layers: ['draft-feature-vertex'] })
-      if (vertexHits.length > 0) e.preventDefault()
     }
 
-    const handleDblClick = (e: any) => {
+    const handleDblClick = (e: MapMouseEvent) => {
       const mode = modeRef.current
-      if (!toolsEnabledRef.current || ['select', 'move', 'edit_points', 'text', 'delete_lasso'].includes(mode)) return
+      if (!toolsEnabledRef.current || ['select', 'move', 'text', 'delete_lasso'].includes(mode)) return
       e.preventDefault()
       onSaveDraftRef.current()
     }
 
     map.on('click', handleMapClick)
-    map.on('mousedown', 'draft-feature-vertex', handleMouseDown)
     map.on('mousedown', handleMouseDown)
     map.on('mousemove', handleMouseMove)
     map.on('mouseup', handleMouseUp)
@@ -471,7 +472,6 @@ export function useDrawingEngine({
 
     return () => {
       map.off('click', handleMapClick)
-      map.off('mousedown', 'draft-feature-vertex', handleMouseDown)
       map.off('mousedown', handleMouseDown)
       map.off('mousemove', handleMouseMove)
       map.off('mouseup', handleMouseUp)
@@ -479,13 +479,13 @@ export function useDrawingEngine({
       map.off('dblclick', handleDblClick)
       map.doubleClickZoom.enable()
     }
-  }, [map, handleMapClick, onAddPoint, draftPointsRef, snapPreviewRef, modeRef, onDeleteFeatures, onSetSelection, selectedFeatureIdsRef, onMoveVertex, onMoveVertexEnd, onQuickCreateTextBox, constrainSquareByPixels])
+  }, [map, handleMapClick, onAddPoint, snapPreviewRef, modeRef, onDeleteFeatures, onSetSelection, selectedFeatureIdsRef, onMoveFeatures, onMoveEnd, onQuickCreateTextBox, onCommitBoxShape, onCommitPenPath, constrainSquareByPixels])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!toolsEnabledRef.current) return
 
-      if (e.key === 'Enter' && !['select', 'move', 'edit_points', 'text'].includes(modeRef.current)) {
+      if (e.key === 'Enter' && !['select', 'move', 'text'].includes(modeRef.current)) {
         e.preventDefault()
         onSaveDraftRef.current()
         return
@@ -505,7 +505,7 @@ export function useDrawingEngine({
           onDeleteFeatures(selected)
           return
         }
-        if (!['select', 'move', 'edit_points', 'text'].includes(modeRef.current)) {
+        if (!['select', 'move', 'text'].includes(modeRef.current)) {
           e.preventDefault()
           onAddPoint((cur) => cur.slice(0, -1))
         }
@@ -513,7 +513,7 @@ export function useDrawingEngine({
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        if (!['select', 'move', 'edit_points', 'text'].includes(modeRef.current)) {
+        if (!['select', 'move', 'text'].includes(modeRef.current)) {
           e.preventDefault()
           onAddPoint((cur) => cur.slice(0, -1))
         }
@@ -571,7 +571,8 @@ export function draftToFeatures(
   mode: DrawMode,
   points: Position[],
   featureType: string,
-  hoverCoordinate: Position | null
+  hoverCoordinate: Position | null,
+  map: Map | null = null,
 ): FeatureCollection | null {
   if (points.length === 0) return null
 
@@ -583,7 +584,10 @@ export function draftToFeatures(
   })
 
   const previewPoints = [...points]
-  if (hoverCoordinate && !['point', 'door'].includes(mode)) {
+  if (
+    hoverCoordinate &&
+    !['point', 'door', 'rectangle', 'square', 'triangle', 'ellipse', 'text', 'delete_lasso'].includes(mode)
+  ) {
     previewPoints.push(hoverCoordinate)
   }
 
@@ -617,17 +621,33 @@ export function draftToFeatures(
           properties: { featureType },
         })
       } else if (mode === 'ellipse') {
-        const center: Position = [start[0] + lngDelta / 2, start[1] + latDelta / 2]
-        const radiusLng = Math.abs(lngDelta) / 2
-        const radiusLat = Math.abs(latDelta) / 2
         const segments = 40
         const ring: Position[] = []
-        for (let i = 0; i <= segments; i += 1) {
-          const angle = (i / segments) * Math.PI * 2
-          ring.push([
-            center[0] + Math.cos(angle) * radiusLng,
-            center[1] + Math.sin(angle) * radiusLat,
-          ])
+        if (map) {
+          const startPx = map.project([start[0], start[1]])
+          const endPx = map.project([end[0], end[1]])
+          const centerPxX = (startPx.x + endPx.x) / 2
+          const centerPxY = (startPx.y + endPx.y) / 2
+          const radiusPxX = Math.abs(endPx.x - startPx.x) / 2
+          const radiusPxY = Math.abs(endPx.y - startPx.y) / 2
+          for (let i = 0; i <= segments; i += 1) {
+            const angle = (i / segments) * Math.PI * 2
+            const pxX = centerPxX + Math.cos(angle) * radiusPxX
+            const pxY = centerPxY + Math.sin(angle) * radiusPxY
+            const lngLat = map.unproject([pxX, pxY])
+            ring.push([lngLat.lng, lngLat.lat])
+          }
+        } else {
+          const center: Position = [start[0] + lngDelta / 2, start[1] + latDelta / 2]
+          const radiusLng = Math.abs(lngDelta) / 2
+          const radiusLat = Math.abs(latDelta) / 2
+          for (let i = 0; i <= segments; i += 1) {
+            const angle = (i / segments) * Math.PI * 2
+            ring.push([
+              center[0] + Math.cos(angle) * radiusLng,
+              center[1] + Math.sin(angle) * radiusLat,
+            ])
+          }
         }
         features.push({
           type: 'Feature',
@@ -665,7 +685,21 @@ export function draftToFeatures(
         })
       }
     }
-  } else if (['polygon', 'room', 'corridor', 'delete_lasso'].includes(mode)) {
+  } else if (mode === 'delete_lasso') {
+    if (previewPoints.length >= 2) {
+      const [start, end] = [previewPoints[0], previewPoints[previewPoints.length - 1]]
+      const p1: Position = [start[0], start[1]]
+      const p2: Position = [end[0], start[1]]
+      const p3: Position = [end[0], end[1]]
+      const p4: Position = [start[0], end[1]]
+      const ring: Position[] = [p1, p2, p3, p4, p1]
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [ring] },
+        properties: { featureType },
+      })
+    }
+  } else if (['polygon', 'room', 'corridor'].includes(mode)) {
     if (previewPoints.length >= 3) {
       const ring = [...previewPoints, previewPoints[0]]
       features.push({
@@ -795,6 +829,6 @@ export function localCoordinates(point: Position, origin: Position) {
 export function translateFeatureGeometry(feature: Feature, deltaLng: number, deltaLat: number): Feature {
   return {
     ...feature,
-    geometry: translateGeometry(feature.geometry as any, deltaLng, deltaLat),
+    geometry: translateGeometry(feature.geometry, deltaLng, deltaLat),
   }
 }
