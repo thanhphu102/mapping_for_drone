@@ -16,25 +16,12 @@ export function useMapContext() {
 
 const editorStyle: maplibregl.StyleSpecification = {
   version: 8,
-  sources: {
-    osm: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '&copy; OpenStreetMap contributors',
-    },
-  },
+  sources: {},
   layers: [
     {
       id: 'background',
       type: 'background',
-      paint: { 'background-color': '#dbeafe' },
-    },
-    {
-      id: 'osm',
-      type: 'raster',
-      source: 'osm',
-      paint: { 'raster-fade-duration': 0 },
+      paint: { 'background-color': '#f3f4f6' },
     },
   ],
 }
@@ -89,10 +76,15 @@ export function MapProvider({ children }: MapProviderProps) {
         zoom: 14,
         fadeDuration: 0,
         preserveDrawingBuffer: false,
+        dragPan: false,
+        scrollZoom: true,
+        boxZoom: false,
+        doubleClickZoom: false,
+        touchZoomRotate: false,
+        keyboard: false,
       })
       mapInstanceRef.current = map
       setMapInstance(map)
-      map.addControl(new maplibregl.NavigationControl(), 'top-right')
 
       const handleLoad = () => {
         mapLoadedRef.current = true

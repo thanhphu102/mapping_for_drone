@@ -41,29 +41,6 @@ projects_path = data_dir / "drawing_projects.json"
 project_lock = asyncio.Lock()
 
 
-def use_postgis_storage() -> bool:
-    return bool(os.getenv("DATABASE_URL"))
-
-
-def get_database_url() -> str:
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("DATABASE_URL is not configured")
-    return database_url
-
-
-def import_psycopg():
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-        from psycopg.types.json import Jsonb
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "PostGIS storage requires psycopg. Install requirements.txt or unset DATABASE_URL."
-        ) from exc
-    return psycopg, dict_row, Jsonb
-
-
 class CreateProjectFromOsmRequest(BaseModel):
     osmType: OsmType
     osmId: int
@@ -102,6 +79,36 @@ def load_projects() -> Dict[str, Any]:
         return {"projects": []}
     if not isinstance(data, dict) or not isinstance(data.get("projects"), list):
         return {"projects": []}
+    # Migrate legacy stored projects: remove deprecated `layers` and ensure every
+    # feature has a `properties.floorId` (set to null) for compatibility with
+    # the floors-as-layers refactor.
+    try:
+        modified = False
+        for project in data.get("projects", []):
+            if isinstance(project, dict):
+                # remove legacy layers key if present
+                if "layers" in project:
+                    project.pop("layers", None)
+                    modified = True
+                features = project.get("features")
+                if isinstance(features, list):
+                    for feature in features:
+                        if not isinstance(feature, dict):
+                            continue
+                        props = feature.get("properties")
+                        if not isinstance(props, dict):
+                            feature["properties"] = {}
+                            props = feature["properties"]
+                        if "floorId" not in props:
+                            props["floorId"] = None
+                            modified = True
+        if modified:
+            # persist migration back to disk
+            save_projects(data)
+    except Exception:
+        # If migration fails for any reason, continue with original data
+        pass
+
     return data
 
 
@@ -697,10 +704,6 @@ def timestamp_value(value: Any) -> int | None:
     return None
 
 
-def postgis_geometry_arg(geometry: Dict[str, Any]) -> str:
-    return json.dumps(geometry, ensure_ascii=False)
-
-
 def normalize_feature(feature: Dict[str, Any]) -> Dict[str, Any]:
     next_feature = dict(feature)
     next_feature["type"] = "Feature"
@@ -766,138 +769,6 @@ def project_row_to_dict(
     }
 
 
-def postgis_project_select_sql(where_clause: str) -> str:
-    return f"""
-        SELECT
-            id,
-            name,
-            osm_type,
-            osm_id,
-            osm_tags,
-            source,
-            editor_mode,
-            ST_AsGeoJSON(base_geometry)::jsonb AS base_geometry,
-            ST_XMin(Box2D(base_geometry)) AS min_lng,
-            ST_YMin(Box2D(base_geometry)) AS min_lat,
-            ST_XMax(Box2D(base_geometry)) AS max_lng,
-            ST_YMax(Box2D(base_geometry)) AS max_lat,
-            ST_Area(base_geometry::geography) / 1000000 AS area_square_km,
-            ST_Perimeter(base_geometry::geography) AS perimeter_m,
-            status,
-            boundary_min_zoom,
-            detail_min_zoom,
-            indoor_min_zoom,
-            config,
-            layers,
-            floors,
-            parent_project_id,
-            source_feature_id,
-            created_at,
-            updated_at,
-            published_at
-        FROM drawing_projects
-        {where_clause}
-    """
-
-
-def ensure_postgis_schema() -> None:
-    if not use_postgis_storage():
-        return
-
-    psycopg, _, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), autocommit=True) as connection:
-        connection.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS drawing_projects (
-                id uuid PRIMARY KEY,
-                name text NOT NULL,
-                source text NOT NULL DEFAULT 'openstreetmap',
-                osm_type text,
-                osm_id bigint,
-                osm_tags jsonb NOT NULL DEFAULT '{}'::jsonb,
-                editor_mode text NOT NULL,
-                base_geometry geometry(MultiPolygon, 4326) NOT NULL,
-                status text NOT NULL DEFAULT 'draft',
-                boundary_min_zoom integer NOT NULL DEFAULT 12,
-                detail_min_zoom integer NOT NULL DEFAULT 15,
-                indoor_min_zoom integer,
-                config jsonb NOT NULL DEFAULT '{}'::jsonb,
-                layers jsonb NOT NULL DEFAULT '[]'::jsonb,
-                floors jsonb NOT NULL DEFAULT '[]'::jsonb,
-                parent_project_id uuid REFERENCES drawing_projects(id) ON DELETE SET NULL,
-                source_feature_id text,
-                created_at timestamptz NOT NULL DEFAULT now(),
-                updated_at timestamptz NOT NULL DEFAULT now(),
-                published_at timestamptz,
-                CONSTRAINT drawing_projects_editor_mode_check CHECK (
-                    editor_mode IN ('region', 'campus', 'agriculture', 'building', 'indoor', 'parking', 'custom')
-                ),
-                CONSTRAINT drawing_projects_status_check CHECK (status IN ('draft', 'published', 'archived')),
-                CONSTRAINT drawing_projects_source_check CHECK (source IN ('openstreetmap', 'manual', 'imported')),
-                CONSTRAINT drawing_projects_valid_base_geometry CHECK (ST_IsValid(base_geometry))
-            )
-            """
-        )
-        connection.execute("ALTER TABLE drawing_projects ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'openstreetmap'")
-        connection.execute("ALTER TABLE drawing_projects ADD COLUMN IF NOT EXISTS boundary_min_zoom integer NOT NULL DEFAULT 12")
-        connection.execute("ALTER TABLE drawing_projects ADD COLUMN IF NOT EXISTS detail_min_zoom integer NOT NULL DEFAULT 15")
-        connection.execute("ALTER TABLE drawing_projects ADD COLUMN IF NOT EXISTS indoor_min_zoom integer")
-        connection.execute("ALTER TABLE drawing_projects ADD COLUMN IF NOT EXISTS config jsonb NOT NULL DEFAULT '{}'::jsonb")
-        connection.execute("ALTER TABLE drawing_projects ADD COLUMN IF NOT EXISTS published_at timestamptz")
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS custom_features (
-                id text PRIMARY KEY,
-                project_id uuid NOT NULL REFERENCES drawing_projects(id) ON DELETE CASCADE,
-                feature_type text NOT NULL DEFAULT 'custom',
-                properties jsonb NOT NULL DEFAULT '{}'::jsonb,
-                floor_scope text NOT NULL DEFAULT 'all',
-                floors jsonb NOT NULL DEFAULT '[]'::jsonb,
-                geometry geometry(Geometry, 4326) NOT NULL,
-                created_at timestamptz NOT NULL DEFAULT now(),
-                updated_at timestamptz NOT NULL DEFAULT now(),
-                CONSTRAINT custom_features_geometry_type_check CHECK (
-                    GeometryType(geometry) IN ('POINT', 'LINESTRING', 'POLYGON')
-                ),
-                CONSTRAINT custom_features_valid_geometry CHECK (ST_IsValid(geometry))
-            )
-            """
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS drawing_projects_base_geometry_gix ON drawing_projects USING gist (base_geometry)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS drawing_projects_status_idx ON drawing_projects (status)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS drawing_projects_editor_mode_idx ON drawing_projects (editor_mode)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS drawing_projects_parent_project_idx ON drawing_projects (parent_project_id)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS custom_features_project_idx ON custom_features (project_id)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS custom_features_geometry_gix ON custom_features USING gist (geometry)"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS custom_features_feature_type_idx ON custom_features (feature_type)"
-        )
-        connection.execute(
-            "ALTER TABLE custom_features ADD COLUMN IF NOT EXISTS floor_id text"
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS custom_features_floor_idx ON custom_features (floor_id)"
-        )
-
-
-@app.on_event("startup")
-async def startup_spatial_storage() -> None:
-    if use_postgis_storage():
-        await asyncio.to_thread(ensure_postgis_schema)
-
 
 def create_project_json(project: Dict[str, Any]) -> Dict[str, Any]:
     data = load_projects()
@@ -952,6 +823,51 @@ def publish_project_json(project_id: str) -> Dict[str, Any] | None:
     return None
 
 
+def delete_project_json(project_id: str) -> bool:
+    data = load_projects()
+    projects = data.get("projects", [])
+    if not isinstance(projects, list):
+        return False
+
+    project_ids = {str(project_id)}
+    changed = True
+    while changed:
+        changed = False
+        for project in projects:
+            if not isinstance(project, dict):
+                continue
+            parent_id = project.get("parentProjectId")
+            current_id = project.get("id")
+            if parent_id in project_ids and current_id not in project_ids:
+                project_ids.add(str(current_id))
+                changed = True
+
+    original_count = len(projects)
+    kept_projects = [project for project in projects if str(project.get("id")) not in project_ids]
+    if len(kept_projects) == original_count:
+        return False
+
+    for project in kept_projects:
+        if not isinstance(project, dict):
+            continue
+        features = project.get("features")
+        if not isinstance(features, list):
+            continue
+        for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            props = feature.get("properties")
+            if not isinstance(props, dict):
+                continue
+            child_id = props.get("childProjectId")
+            if child_id and str(child_id) in project_ids:
+                props["childProjectId"] = None
+
+    data["projects"] = kept_projects
+    save_projects(data)
+    return True
+
+
 def map_overlays_json(min_lng: float, min_lat: float, max_lng: float, max_lat: float) -> List[Dict[str, Any]]:
     overlays = []
     for project in load_projects()["projects"]:
@@ -969,357 +885,12 @@ def map_overlays_json(min_lng: float, min_lat: float, max_lng: float, max_lat: f
     return overlays
 
 
-def create_project_postgis(project: Dict[str, Any]) -> Dict[str, Any]:
-    psycopg, dict_row, Jsonb = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO drawing_projects (
-                    id,
-                    name,
-                    source,
-                    osm_type,
-                    osm_id,
-                    osm_tags,
-                    editor_mode,
-                    base_geometry,
-                    status,
-                    boundary_min_zoom,
-                    detail_min_zoom,
-                    indoor_min_zoom,
-                    config,
-                    layers,
-                    floors,
-                    parent_project_id,
-                    source_feature_id,
-                    created_at,
-                    updated_at,
-                    published_at
-                )
-                VALUES (
-                    %(id)s,
-                    %(name)s,
-                    %(source)s,
-                    %(osm_type)s,
-                    %(osm_id)s,
-                    %(osm_tags)s,
-                    %(editor_mode)s,
-                    ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(%(base_geometry)s), 4326)),
-                    %(status)s,
-                    %(boundary_min_zoom)s,
-                    %(detail_min_zoom)s,
-                    %(indoor_min_zoom)s,
-                    %(config)s,
-                    %(layers)s,
-                    %(floors)s,
-                    %(parent_project_id)s,
-                    %(source_feature_id)s,
-                    to_timestamp(%(created_at)s),
-                    to_timestamp(%(updated_at)s),
-                    CASE WHEN %(published_at)s IS NULL THEN NULL ELSE to_timestamp(%(published_at)s) END
-                )
-                """,
-                {
-                    "id": project["id"],
-                    "name": project["name"],
-                    "source": project["source"],
-                    "osm_type": project["osmType"],
-                    "osm_id": project["osmId"],
-                    "osm_tags": Jsonb(project["osmTags"]),
-                    "editor_mode": project["editorMode"],
-                    "base_geometry": postgis_geometry_arg(project["baseGeometry"]),
-                    "status": project["status"],
-                    "boundary_min_zoom": project["boundaryMinZoom"],
-                    "detail_min_zoom": project["detailMinZoom"],
-                    "indoor_min_zoom": project["indoorMinZoom"],
-                    "config": Jsonb(project["config"]),
-                    "layers": Jsonb(project["layers"]),
-                    "floors": Jsonb(project["floors"]),
-                    "parent_project_id": project.get("parentProjectId"),
-                    "source_feature_id": project.get("sourceFeatureId"),
-                    "created_at": project["createdAt"],
-                    "updated_at": project["updatedAt"],
-                    "published_at": project.get("publishedAt"),
-                },
-            )
-        connection.commit()
-    stored = get_project_postgis(project["id"])
-    if stored is None:
-        raise HTTPException(status_code=500, detail="Drawing project was not persisted")
-    return stored
-
-
-def get_project_features_postgis(project_id: str) -> List[Dict[str, Any]]:
-    psycopg, dict_row, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        rows = connection.execute(
-            """
-            SELECT
-                id,
-                properties,
-                ST_AsGeoJSON(geometry)::jsonb AS geometry
-            FROM custom_features
-            WHERE project_id = %s
-            ORDER BY created_at ASC
-            """,
-            (project_id,),
-        ).fetchall()
-    return [feature_to_project_geojson(row) for row in rows]
-
-
-def get_project_visible_features_postgis(
-    project_id: str,
-    bbox: List[float],
-    zoom: float,
-    active_layer_id: str | None = None,
-) -> List[Dict[str, Any]] | None:
-    project = get_project_postgis(project_id)
-    if project is None:
-        return None
-    layers = project.get("layers") if isinstance(project.get("layers"), list) else []
-    visible_feature_types = set()
-    for layer in layers:
-        if not isinstance(layer, dict) or not layer.get("visible", True):
-            continue
-        min_zoom = float(layer.get("minZoom", 0))
-        max_zoom = float(layer.get("maxZoom", 24))
-        if zoom < min_zoom or zoom > max_zoom:
-            continue
-        if active_layer_id and str(layer.get("id")) != active_layer_id:
-            continue
-        for feature_type in layer.get("featureTypes") or []:
-            visible_feature_types.add(str(feature_type))
-
-    psycopg, dict_row, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        rows = connection.execute(
-            """
-            SELECT
-                id,
-                properties,
-                ST_AsGeoJSON(geometry)::jsonb AS geometry
-            FROM custom_features
-            WHERE project_id = %(project_id)s
-              AND ST_Intersects(geometry, ST_MakeEnvelope(%(min_lng)s, %(min_lat)s, %(max_lng)s, %(max_lat)s, 4326))
-            ORDER BY created_at ASC
-            """,
-            {
-                "project_id": project_id,
-                "min_lng": bbox[0],
-                "min_lat": bbox[1],
-                "max_lng": bbox[2],
-                "max_lat": bbox[3],
-            },
-        ).fetchall()
-    features = [feature_to_project_geojson(row) for row in rows]
-    visible_features = []
-    for feature in features:
-        properties = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
-        feature_type = str(properties.get("featureType") or "custom")
-        feature_min_zoom = float(properties.get("minZoom", 0))
-        feature_max_zoom = float(properties.get("maxZoom", 24))
-        if zoom < feature_min_zoom or zoom > feature_max_zoom:
-            continue
-        if visible_feature_types and feature_type not in visible_feature_types:
-            continue
-        visible_features.append(feature)
-    return visible_features
-
-
-def delete_feature_postgis(project_id: str, feature_id: str) -> bool:
-    psycopg, dict_row, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        result = connection.execute(
-            "DELETE FROM custom_features WHERE id = %s AND project_id = %s RETURNING id",
-            (feature_id, project_id),
-        ).fetchone()
-        if result:
-            connection.execute(
-                "UPDATE drawing_projects SET updated_at = now() WHERE id = %s",
-                (project_id,),
-            )
-        connection.commit()
-    return result is not None
-
-
-def update_project_floors_postgis(project_id: str, floors: List[Dict[str, Any]]) -> Dict[str, Any] | None:
-    psycopg, dict_row, Jsonb = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        result = connection.execute(
-            "UPDATE drawing_projects SET floors = %s, updated_at = now() WHERE id = %s RETURNING id",
-            (Jsonb(floors), project_id),
-        ).fetchone()
-        connection.commit()
-    if result is None:
-        return None
-    return get_project_postgis(project_id)
-
-
-def get_project_postgis(project_id: str) -> Dict[str, Any] | None:
-    psycopg, dict_row, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        row = connection.execute(
-            postgis_project_select_sql("WHERE id = %s"),
-            (project_id,),
-        ).fetchone()
-    if row is None:
-        return None
-    return project_row_to_dict(row, get_project_features_postgis(project_id))
-
-
-def save_feature_postgis(project_id: str, feature: Dict[str, Any]) -> Dict[str, Any] | None:
-    psycopg, dict_row, Jsonb = import_psycopg()
-    next_feature = normalize_feature(feature)
-    geometry = next_feature.get("geometry")
-    if not isinstance(geometry, dict):
-        raise HTTPException(status_code=422, detail="Feature geometry is required")
-    if geometry.get("type") not in {"Point", "LineString", "Polygon"}:
-        raise HTTPException(status_code=422, detail="Only Point, LineString, and Polygon features are supported")
-
-    feature_geometry = postgis_geometry_arg(geometry)
-    properties = next_feature["properties"]
-    properties["updatedAt"] = int(time.time())
-    feature_type = str(properties.get("featureType") or "custom")
-    floor_scope = str(properties.get("floorScope") or "all")
-    floors = properties.get("floors") if isinstance(properties.get("floors"), list) else []
-
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        with connection.cursor() as cursor:
-            validation = cursor.execute(
-                """
-                WITH input_feature AS (
-                    SELECT ST_SetSRID(ST_GeomFromGeoJSON(%(feature_geometry)s), 4326) AS geometry
-                )
-                SELECT
-                    ST_IsValid(input_feature.geometry) AS is_valid,
-                    ST_Covers(drawing_projects.base_geometry, input_feature.geometry) AS is_inside
-                FROM drawing_projects, input_feature
-                WHERE drawing_projects.id = %(project_id)s
-                """,
-                {
-                    "project_id": project_id,
-                    "feature_geometry": feature_geometry,
-                },
-            ).fetchone()
-            if validation is None:
-                return None
-            if not validation["is_valid"]:
-                raise HTTPException(status_code=422, detail="Feature geometry is invalid")
-            if not validation["is_inside"]:
-                raise HTTPException(status_code=422, detail="Feature must stay inside the project base boundary")
-
-            cursor.execute(
-                """
-                INSERT INTO custom_features (
-                    id,
-                    project_id,
-                    feature_type,
-                    properties,
-                    floor_scope,
-                    floors,
-                    geometry,
-                    updated_at
-                )
-                VALUES (
-                    %(id)s,
-                    %(project_id)s,
-                    %(feature_type)s,
-                    %(properties)s,
-                    %(floor_scope)s,
-                    %(floors)s,
-                    ST_SetSRID(ST_GeomFromGeoJSON(%(feature_geometry)s), 4326),
-                    now()
-                )
-                ON CONFLICT (id) DO UPDATE SET
-                    feature_type = EXCLUDED.feature_type,
-                    properties = EXCLUDED.properties,
-                    floor_scope = EXCLUDED.floor_scope,
-                    floors = EXCLUDED.floors,
-                    geometry = EXCLUDED.geometry,
-                    updated_at = now()
-                RETURNING
-                    id,
-                    properties,
-                    ST_AsGeoJSON(geometry)::jsonb AS geometry
-                """,
-                {
-                    "id": str(next_feature["id"]),
-                    "project_id": project_id,
-                    "feature_type": feature_type,
-                    "properties": Jsonb(properties),
-                    "floor_scope": floor_scope,
-                    "floors": Jsonb(floors),
-                    "feature_geometry": feature_geometry,
-                },
-            )
-            row = cursor.fetchone()
-            cursor.execute(
-                "UPDATE drawing_projects SET updated_at = now() WHERE id = %s",
-                (project_id,),
-            )
-        connection.commit()
-    return feature_to_project_geojson(row)
-
-
-def publish_project_postgis(project_id: str) -> Dict[str, Any] | None:
-    psycopg, dict_row, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        row = connection.execute(
-            """
-            UPDATE drawing_projects
-            SET status = 'published', updated_at = now(), published_at = now()
-            WHERE id = %s
-            RETURNING id
-            """,
-            (project_id,),
-        ).fetchone()
-        connection.commit()
-    if row is None:
-        return None
-    return get_project_postgis(project_id)
-
-
-def map_overlays_postgis(min_lng: float, min_lat: float, max_lng: float, max_lat: float) -> List[Dict[str, Any]]:
-    psycopg, dict_row, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        rows = connection.execute(
-            postgis_project_select_sql(
-                """
-                WHERE status = 'published'
-                AND ST_Intersects(base_geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))
-                ORDER BY updated_at DESC
-                """
-            ),
-            (min_lng, min_lat, max_lng, max_lat),
-        ).fetchall()
-    return [
-        project_row_to_dict(row, get_project_features_postgis(str(row["id"])))
-        for row in rows
-    ]
-
-
-def storage_status() -> Dict[str, Any]:
-    if not use_postgis_storage():
-        return {"storage": "json", "postgis": False}
-    psycopg, dict_row, _ = import_psycopg()
-    with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
-        row = connection.execute(
-            "SELECT postgis_full_version() AS postgis_version"
-        ).fetchone()
-    return {"storage": "postgis", "postgis": True, "postgisVersion": row["postgis_version"]}
-
-
 async def create_project_record(project: Dict[str, Any]) -> Dict[str, Any]:
     async with project_lock:
-        if use_postgis_storage():
-            return await asyncio.to_thread(create_project_postgis, project)
         return await asyncio.to_thread(create_project_json, project)
 
 
 async def get_project_record(project_id: str) -> Dict[str, Any] | None:
-    if use_postgis_storage():
-        return await asyncio.to_thread(get_project_postgis, project_id)
     return await asyncio.to_thread(get_project_json, project_id)
 
 
@@ -1327,8 +898,8 @@ async def get_project_layers_record(project_id: str) -> List[Dict[str, Any]] | N
     project = await get_project_record(project_id)
     if project is None:
         return None
-    layers = project.get("layers")
-    return layers if isinstance(layers, list) else []
+    # Layers are deprecated; return empty list for compatibility.
+    return []
 
 
 async def get_project_features_record(project_id: str) -> List[Dict[str, Any]] | None:
@@ -1346,36 +917,9 @@ async def get_project_visible_features_record(
     active_layer_id: str | None = None,
     floor_id: str | None = None,
 ) -> List[Dict[str, Any]] | None:
-    if use_postgis_storage():
-        return await asyncio.to_thread(
-            get_project_visible_features_postgis,
-            project_id,
-            bbox,
-            zoom,
-            active_layer_id,
-        )
     project = await get_project_record(project_id)
     if project is None:
         return None
-
-    layers = project.get("layers") if isinstance(project.get("layers"), list) else []
-    layer_by_id = {
-        str(layer.get("id")): layer
-        for layer in layers
-        if isinstance(layer, dict) and layer.get("id") is not None
-    }
-    visible_feature_types = set()
-    for layer in layers:
-        if not isinstance(layer, dict) or not layer.get("visible", True):
-            continue
-        min_zoom = float(layer.get("minZoom", 0))
-        max_zoom = float(layer.get("maxZoom", 24))
-        if zoom < min_zoom or zoom > max_zoom:
-            continue
-        if active_layer_id and str(layer.get("id")) != active_layer_id:
-            continue
-        for feature_type in layer.get("featureTypes") or []:
-            visible_feature_types.add(str(feature_type))
 
     features = project.get("features") if isinstance(project.get("features"), list) else []
     visible_features = []
@@ -1386,12 +930,12 @@ async def get_project_visible_features_record(
         geometry = feature.get("geometry")
         if not isinstance(geometry, dict):
             continue
+        if floor_id and str(properties.get("floorId") or "") != floor_id:
+            continue
         feature_type = str(properties.get("featureType") or "custom")
         feature_min_zoom = float(properties.get("minZoom", 0))
         feature_max_zoom = float(properties.get("maxZoom", 24))
         if zoom < feature_min_zoom or zoom > feature_max_zoom:
-            continue
-        if visible_feature_types and feature_type not in visible_feature_types:
             continue
         feature_bbox = geometry_bounds(geometry)
         if feature_bbox and bbox_intersects(feature_bbox, bbox):
@@ -1411,23 +955,22 @@ async def get_project_feature_record(project_id: str, feature_id: str) -> Dict[s
 
 async def save_feature_record(project_id: str, feature: Dict[str, Any]) -> Dict[str, Any] | None:
     async with project_lock:
-        if use_postgis_storage():
-            return await asyncio.to_thread(save_feature_postgis, project_id, feature)
         return await asyncio.to_thread(save_feature_json, project_id, feature)
 
 
 async def publish_project_record(project_id: str) -> Dict[str, Any] | None:
     async with project_lock:
-        if use_postgis_storage():
-            return await asyncio.to_thread(publish_project_postgis, project_id)
         return await asyncio.to_thread(publish_project_json, project_id)
+
+
+async def delete_project_record(project_id: str) -> bool:
+    async with project_lock:
+        return await asyncio.to_thread(delete_project_json, project_id)
 
 
 async def map_overlay_records(
     min_lng: float, min_lat: float, max_lng: float, max_lat: float
 ) -> List[Dict[str, Any]]:
-    if use_postgis_storage():
-        return await asyncio.to_thread(map_overlays_postgis, min_lng, min_lat, max_lng, max_lat)
     return await asyncio.to_thread(map_overlays_json, min_lng, min_lat, max_lng, max_lat)
 
 
@@ -1465,7 +1008,6 @@ def build_project_payload(
         "detailMinZoom": thresholds["detailMinZoom"],
         "indoorMinZoom": thresholds["indoorMinZoom"],
         "config": default_project_config(editor_mode),
-        "layers": default_layers(editor_mode),
         "floors": default_floors(editor_mode),
         "features": [],
         "parentProjectId": parent_project_id,
@@ -1816,22 +1358,19 @@ async def save_drawing_feature(project_id: str, payload: SaveFeatureRequest):
 @app.delete("/api/drawing-projects/{project_id}/features/{feature_id}")
 async def delete_drawing_feature(project_id: str, feature_id: str):
     async with project_lock:
-        if use_postgis_storage():
-            deleted = await asyncio.to_thread(delete_feature_postgis, project_id, feature_id)
-        else:
-            data = load_projects()
-            deleted = False
-            for project in data["projects"]:
-                if project.get("id") != project_id:
-                    continue
-                features = project.get("features", [])
-                original_length = len(features)
-                project["features"] = [f for f in features if f.get("id") != feature_id]
-                if len(project["features"]) < original_length:
-                    deleted = True
-                    project["updatedAt"] = int(time.time())
-                    save_projects(data)
-                break
+        data = load_projects()
+        deleted = False
+        for project in data["projects"]:
+            if project.get("id") != project_id:
+                continue
+            features = project.get("features", [])
+            original_length = len(features)
+            project["features"] = [f for f in features if f.get("id") != feature_id]
+            if len(project["features"]) < original_length:
+                deleted = True
+                project["updatedAt"] = int(time.time())
+                save_projects(data)
+            break
     if not deleted:
         raise HTTPException(status_code=404, detail="Feature not found")
     return {"ok": True}
@@ -1872,18 +1411,15 @@ async def create_project_floor(project_id: str, payload: FloorPayload):
     }
     floors.append(new_floor)
     async with project_lock:
-        if use_postgis_storage():
-            updated = await asyncio.to_thread(update_project_floors_postgis, project_id, floors)
-        else:
-            data = load_projects()
-            updated = None
-            for p in data["projects"]:
-                if p.get("id") == project_id:
-                    p["floors"] = floors
-                    p["updatedAt"] = int(time.time())
-                    save_projects(data)
-                    updated = p
-                    break
+        data = load_projects()
+        updated = None
+        for p in data["projects"]:
+            if p.get("id") == project_id:
+                p["floors"] = floors
+                p["updatedAt"] = int(time.time())
+                save_projects(data)
+                updated = p
+                break
     if updated is None:
         raise HTTPException(status_code=500, detail="Failed to update floors")
     return {"ok": True, "floor": new_floor, "floors": floors}
@@ -1909,16 +1445,13 @@ async def update_project_floor(project_id: str, floor_id: str, payload: FloorPay
     if not found:
         raise HTTPException(status_code=404, detail="Floor not found")
     async with project_lock:
-        if use_postgis_storage():
-            await asyncio.to_thread(update_project_floors_postgis, project_id, floors)
-        else:
-            data = load_projects()
-            for p in data["projects"]:
-                if p.get("id") == project_id:
-                    p["floors"] = floors
-                    p["updatedAt"] = int(time.time())
-                    save_projects(data)
-                    break
+        data = load_projects()
+        for p in data["projects"]:
+            if p.get("id") == project_id:
+                p["floors"] = floors
+                p["updatedAt"] = int(time.time())
+                save_projects(data)
+                break
     return {"ok": True, "floors": floors}
 
 
@@ -1933,16 +1466,13 @@ async def delete_project_floor(project_id: str, floor_id: str):
     if len(floors) == original:
         raise HTTPException(status_code=404, detail="Floor not found")
     async with project_lock:
-        if use_postgis_storage():
-            await asyncio.to_thread(update_project_floors_postgis, project_id, floors)
-        else:
-            data = load_projects()
-            for p in data["projects"]:
-                if p.get("id") == project_id:
-                    p["floors"] = floors
-                    p["updatedAt"] = int(time.time())
-                    save_projects(data)
-                    break
+        data = load_projects()
+        for p in data["projects"]:
+            if p.get("id") == project_id:
+                p["floors"] = floors
+                p["updatedAt"] = int(time.time())
+                save_projects(data)
+                break
     return {"ok": True, "floors": floors}
 
 
@@ -1952,6 +1482,14 @@ async def publish_drawing_project(project_id: str):
     if project is not None:
         return {"ok": True, "project": project}
     raise HTTPException(status_code=404, detail="Drawing project not found")
+
+
+@app.delete("/api/drawing-projects/{project_id}")
+async def delete_drawing_project(project_id: str):
+    deleted = await delete_project_record(project_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Drawing project not found")
+    return {"ok": True}
 
 
 @app.post("/api/drawing-projects/{project_id}/features/{feature_id}/create-child-project")
@@ -2000,7 +1538,7 @@ async def get_map_overlays(bbox: str):
 
 @app.get("/api/storage/status")
 async def get_storage_status():
-    return await asyncio.to_thread(storage_status)
+    return {"storage": "json", "postgis": False}
 
 # Mount static files AFTER all routes are defined
 frontend_dist_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

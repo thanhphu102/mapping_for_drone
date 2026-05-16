@@ -87,11 +87,6 @@ function App() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname)
   const spatialEditorMatch = currentPath.match(/^\/spatial-editor\/([^/]+)$/)
 
-  const navigateTo = useCallback((path: string) => {
-    window.history.pushState(null, '', path)
-    setCurrentPath(path)
-  }, [])
-
   useEffect(() => {
     const handleRouteChange = () => {
       setCurrentPath(window.location.pathname)
@@ -340,7 +335,7 @@ function App() {
           confirmedLargeArea,
         },
       )
-      navigateTo(`/spatial-editor/${response.projectId}`)
+      window.location.assign(`/spatial-editor/${response.projectId}`)
     } catch (error) {
       const requiresConfirmation =
         typeof error === 'object' &&
@@ -363,7 +358,7 @@ function App() {
     } finally {
       setIsOpeningEditor(false)
     }
-  }, [confirmedLargeArea, editorModeOverride, locationFetch.selectedCandidate, navigateTo])
+  }, [confirmedLargeArea, editorModeOverride, locationFetch.selectedCandidate])
 
   const handleCloseOsmPanel = useCallback(() => {
     setLocationFetch(initialLocationFetchState)
@@ -376,7 +371,9 @@ function App() {
     return (
       <SpatialEditor
         projectId={spatialEditorMatch[1]}
-        onBack={() => navigateTo('/')}
+        onBack={() => {
+          window.location.assign('/')
+        }}
       />
     )
   }

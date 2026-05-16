@@ -3,6 +3,7 @@ import type { Feature, FeatureCollection, Geometry } from 'geojson'
 import type { GeoJSONSource, Map } from 'maplibre-gl'
 import type { DrawingProject, ProjectCanvasConfig } from '../types/drone'
 import type { SnapPreview } from './useSnapEngine'
+import type { DrawMode } from './useDrawingEngine'
 
 const boundarySourceId = 'base-boundary'
 const featureSourceId = 'project-features'
@@ -18,6 +19,8 @@ const dimMaskSourceId = 'dim-mask'
 const dimMaskLayerId = 'dim-mask-fill'
 const snapPreviewSourceId = 'snap-preview'
 const snapPreviewLayerId = 'snap-preview-point'
+const selectedVertexSourceId = 'selected-feature-vertex-source'
+const selectedVertexLayerId = 'selected-feature-vertex'
 
 function mapReadyForStyle(map: Map, mapLoaded: boolean) {
   return mapLoaded && map.isStyleLoaded()
@@ -76,6 +79,36 @@ function boundaryBBox(project: DrawingProject): [number, number, number, number]
   return project.bbox
 }
 
+function selectedVertexFeatures(visibleFeatures: Feature[], selectedFeatureIds: string[]): Feature[] {
+  if (selectedFeatureIds.length !== 1) return []
+  const targetId = selectedFeatureIds[0]
+  const selected = visibleFeatures.find((feature) => String(feature.id ?? feature.properties?.id ?? '') === targetId)
+  if (!selected?.geometry) return []
+  if (selected.geometry.type === 'Point') {
+    return [{
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: selected.geometry.coordinates },
+      properties: { featureId: targetId, vertexIndex: 0 },
+    } as Feature]
+  }
+  if (selected.geometry.type === 'LineString') {
+    return selected.geometry.coordinates.map((coordinate, index) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: coordinate },
+      properties: { featureId: targetId, vertexIndex: index },
+    } as Feature))
+  }
+  if (selected.geometry.type === 'Polygon') {
+    const ring = selected.geometry.coordinates[0] ?? []
+    return ring.slice(0, -1).map((coordinate, index) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: coordinate },
+      properties: { featureId: targetId, vertexIndex: index },
+    } as Feature))
+  }
+  return []
+}
+
 interface UseMapRendererOptions {
   map: Map | null
   mapReady: boolean
@@ -84,6 +117,8 @@ interface UseMapRendererOptions {
   project: DrawingProject | null
   projectConfig: ProjectCanvasConfig
   visibleFeatures: Feature[]
+  selectedFeatureIds: string[]
+  activeMode: DrawMode
   draftCollection: GeoJSON.FeatureCollection | null
   snapPreview: SnapPreview | null
   isMounted: () => boolean
@@ -99,6 +134,8 @@ export function useMapRenderer({
   project,
   projectConfig,
   visibleFeatures,
+  selectedFeatureIds,
+  activeMode,
   draftCollection,
   snapPreview,
   isMounted,
@@ -131,6 +168,11 @@ export function useMapRenderer({
         ]
         : [],
     )
+    const selectedVertexCollection = featureCollection(
+      activeMode === 'edit_points'
+        ? selectedVertexFeatures(visibleFeatures, selectedFeatureIds)
+        : [],
+    )
 
     // --- Sources ---
     if (!getSourceSafe(map, boundarySourceId)) {
@@ -139,10 +181,19 @@ export function useMapRenderer({
       getSourceSafe(map, boundarySourceId)?.setData(baseCollection)
     }
 
-    if (!getSourceSafe(map, dimMaskSourceId)) {
-      map.addSource(dimMaskSourceId, { type: 'geojson', data: dimCollection })
+    if (projectConfig.canvasMode === 'dimOutside') {
+      if (!getSourceSafe(map, dimMaskSourceId)) {
+        map.addSource(dimMaskSourceId, { type: 'geojson', data: dimCollection })
+      } else {
+        getSourceSafe(map, dimMaskSourceId)?.setData(dimCollection)
+      }
     } else {
-      getSourceSafe(map, dimMaskSourceId)?.setData(dimCollection)
+      if (map.getLayer(dimMaskLayerId)) {
+        map.removeLayer(dimMaskLayerId)
+      }
+      if (getSourceSafe(map, dimMaskSourceId)) {
+        map.removeSource(dimMaskSourceId)
+      }
     }
 
     if (!getSourceSafe(map, featureSourceId)) {
@@ -163,8 +214,14 @@ export function useMapRenderer({
       getSourceSafe(map, snapPreviewSourceId)?.setData(snapCollection)
     }
 
+    if (!getSourceSafe(map, selectedVertexSourceId)) {
+      map.addSource(selectedVertexSourceId, { type: 'geojson', data: selectedVertexCollection })
+    } else {
+      getSourceSafe(map, selectedVertexSourceId)?.setData(selectedVertexCollection)
+    }
+
     // --- Layers ---
-    if (!map.getLayer(dimMaskLayerId)) {
+    if (projectConfig.canvasMode === 'dimOutside' && !map.getLayer(dimMaskLayerId)) {
       map.addLayer({
         id: dimMaskLayerId,
         type: 'fill',
@@ -178,7 +235,7 @@ export function useMapRenderer({
         id: baseBoundaryFillLayerId,
         type: 'fill',
         source: boundarySourceId,
-        paint: { 'fill-color': '#0ea5e9', 'fill-opacity': 0.18 },
+        paint: { 'fill-color': '#ffffff', 'fill-opacity': 1 },
       })
     }
 
@@ -212,13 +269,74 @@ export function useMapRenderer({
       })
     }
 
+    if (!map.getLayer('project-features-selected-outline')) {
+      map.addLayer({
+        id: 'project-features-selected-outline',
+        type: 'line',
+        source: featureSourceId,
+        paint: {
+          'line-color': '#38bdf8',
+          'line-width': 4,
+        },
+      })
+    }
+
+    if (!map.getLayer('project-features-label')) {
+      map.addLayer({
+        id: 'project-features-label',
+        type: 'symbol',
+        source: featureSourceId,
+        minzoom: project.detailMinZoom,
+        filter: ['!=', ['get', 'featureType'], 'text_label'],
+        layout: {
+          'text-field': ['coalesce', ['get', 'tag'], ['get', 'name'], ['get', 'featureType']],
+          'text-size': 11,
+          'text-offset': [0, 1.1],
+          'text-anchor': 'top',
+        },
+        paint: {
+          'text-color': '#dbeafe',
+          'text-halo-color': '#0f172a',
+          'text-halo-width': 1.2,
+        },
+      })
+    }
+
+    if (!map.getLayer('project-text-label')) {
+      map.addLayer({
+        id: 'project-text-label',
+        type: 'symbol',
+        source: featureSourceId,
+        minzoom: project.boundaryMinZoom,
+        filter: ['==', ['get', 'featureType'], 'text_label'],
+        layout: {
+          'text-field': ['coalesce', ['get', 'text'], ['get', 'name'], ['get', 'tag'], 'Text'],
+          'text-size': 14,
+          'text-anchor': 'center',
+          'text-justify': 'center',
+          'text-max-width': 20,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+        },
+        paint: {
+          'text-color': '#0f172a',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 1.2,
+        },
+      })
+    }
+
     if (!map.getLayer(featurePointLayerId)) {
       map.addLayer({
         id: featurePointLayerId,
         type: 'circle',
         source: featureSourceId,
         minzoom: project.detailMinZoom,
-        filter: ['==', ['geometry-type'], 'Point'],
+        filter: [
+          'all',
+          ['==', ['geometry-type'], 'Point'],
+          ['!=', ['get', 'featureType'], 'text_label'],
+        ],
         paint: {
           'circle-color': '#15803d',
           'circle-radius': 6,
@@ -293,6 +411,20 @@ export function useMapRenderer({
       })
     }
 
+    if (!map.getLayer(selectedVertexLayerId)) {
+      map.addLayer({
+        id: selectedVertexLayerId,
+        type: 'circle',
+        source: selectedVertexSourceId,
+        paint: {
+          'circle-color': '#38bdf8',
+          'circle-radius': 5,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
+        },
+      })
+    }
+
     // --- Fit bounds once per project ---
     map.resize()
     requestAnimationFrame(() => {
@@ -316,7 +448,18 @@ export function useMapRenderer({
         onMessage('Base boundary rendered')
       }
     })
-  }, [draftCollection, mapReady, mapLoaded, project, projectConfig.precisionZoom, snapPreview, visibleFeatures, map, isMounted, onBoundaryRendered, onMessage])
+  }, [activeMode, draftCollection, mapReady, mapLoaded, project, projectConfig.precisionZoom, snapPreview, visibleFeatures, selectedFeatureIds, map, isMounted, onBoundaryRendered, onMessage])
+
+  useEffect(() => {
+    if (!map || !project || !mapReadyForStyle(map, mapLoaded)) return
+    const hasSelection = selectedFeatureIds.length > 0
+    const filter = hasSelection
+      ? ['in', ['to-string', ['id']], ['literal', selectedFeatureIds]]
+      : ['==', ['geometry-type'], 'GeometryCollection']
+    if (map.getLayer('project-features-selected-outline')) {
+      map.setFilter('project-features-selected-outline', filter as any)
+    }
+  }, [map, mapLoaded, project, selectedFeatureIds])
 
   // --- Precision mode: fade raster tiles at deep zoom ---
   useEffect(() => {

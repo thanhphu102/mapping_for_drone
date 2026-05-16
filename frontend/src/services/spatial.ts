@@ -4,7 +4,6 @@ import type {
   OsmElementGeometryResponse,
   OsmElementType,
   SpatialFloor,
-  SpatialLayer,
 } from '../types/drone'
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -100,17 +99,6 @@ export async function fetchDrawingProject(
   return readJsonResponse<DrawingProject>(response)
 }
 
-export async function fetchDrawingProjectLayers(
-  projectId: string,
-  signal?: AbortSignal,
-): Promise<SpatialLayer[]> {
-  const response = await fetch(`/api/drawing-projects/${projectId}/layers`, {
-    signal,
-  })
-  const data = await readJsonResponse<{ layers: SpatialLayer[] }>(response)
-  return data.layers
-}
-
 export async function fetchDrawingProjectFeatures(
   projectId: string,
   signal?: AbortSignal,
@@ -171,6 +159,15 @@ export async function publishDrawingProject(
   return readJsonResponse<{ ok: boolean; project: DrawingProject }>(response)
 }
 
+export async function deleteDrawingProject(
+  projectId: string,
+): Promise<{ ok: boolean }> {
+  const response = await fetch(`/api/drawing-projects/${projectId}`, {
+    method: 'DELETE',
+  })
+  return readJsonResponse<{ ok: boolean }>(response)
+}
+
 export async function deleteDrawingFeature(
   projectId: string,
   featureId: string,
@@ -200,6 +197,29 @@ export async function createProjectFloor(
     body: JSON.stringify(floor),
   })
   return readJsonResponse<{ floor: SpatialFloor; floors: SpatialFloor[] }>(response)
+}
+
+export async function updateProjectFloor(
+  projectId: string,
+  floorId: string,
+  floor: { label: string; code: string; level: number; elevation?: number; visible?: boolean; sortOrder?: number },
+): Promise<{ ok: boolean; floors: SpatialFloor[] }> {
+  const response = await fetch(`/api/drawing-projects/${projectId}/floors/${floorId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(floor),
+  })
+  return readJsonResponse<{ ok: boolean; floors: SpatialFloor[] }>(response)
+}
+
+export async function deleteProjectFloor(
+  projectId: string,
+  floorId: string,
+): Promise<{ ok: boolean; floors: SpatialFloor[] }> {
+  const response = await fetch(`/api/drawing-projects/${projectId}/floors/${floorId}`, {
+    method: 'DELETE',
+  })
+  return readJsonResponse<{ ok: boolean; floors: SpatialFloor[] }>(response)
 }
 
 export async function fetchMapOverlays(

@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, Position } from 'geojson'
-import type { DrawingProject, ProjectCanvasConfig, SpatialLayer } from '../types/drone'
+import type { DrawingProject, ProjectCanvasConfig } from '../types/drone'
 import {
   fetchDrawingProject,
-  fetchDrawingProjectLayers,
   fetchProjectVisibleFeatures,
   publishDrawingProject,
   saveDrawingFeature,
   deleteDrawingFeature,
   createProjectFloor,
+  updateProjectFloor,
+  deleteProjectFloor,
   createChildProject,
 } from '../services/spatial'
 import { MapProvider, useMapContext } from './MapProvider'
 import { EditorToolbar } from './EditorToolbar'
 import { EditorToolbox } from './EditorToolbox'
+import { EditorStructurePanel } from './EditorStructurePanel'
 import { EditorSidebar } from './EditorSidebar'
 import { FloorSelector } from './FloorSelector'
 import { BuildingEntryOverlay } from './BuildingEntryOverlay'
@@ -22,14 +24,12 @@ import { useSnapEngine, type SnapPreview } from '../hooks/useSnapEngine'
 import {
   useDrawingEngine,
   type DrawMode,
-  activeLayerForProject,
-  layerSupportsMode,
-  featureTypeForLayer,
+  featureTypeForMode,
   draftToFeatures,
 } from '../hooks/useDrawingEngine'
 
 const DEFAULT_PROJECT_CONFIG: ProjectCanvasConfig = {
-  canvasMode: 'dimOutside',
+  canvasMode: 'normal',
   defaultZoom: 14,
   detailZoom: 18,
   precisionZoom: 20,
@@ -65,15 +65,15 @@ export function SpatialEditor(props: SpatialEditorProps) {
 function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const { map, mapReady, mapLoaded, mapZoom, containerRef } = useMapContext()
   const isMountedRef = useRef(false)
+  const fittedProjectIdRef = useRef<string | null>(null)
   const modeRef = useRef<DrawMode>('select')
   const snapPreviewRef = useRef<SnapPreview | null>(null)
   const draftPointsRef = useRef<Position[]>([])
+  const selectedFeatureIdsRef = useRef<string[]>([])
 
   // --- Core state ---
   const [project, setProject] = useState<DrawingProject | null>(null)
-  const [layers, setLayers] = useState<SpatialLayer[]>([])
   const [visibleFeatures, setVisibleFeatures] = useState<Feature[]>([])
-  const [userActiveLayerId, setUserActiveLayerId] = useState<string | null>(null)
   const [userMode, setUserMode] = useState<DrawMode>('select')
   const [draftPoints, setDraftPoints] = useState<Position[]>([])
   const [hoverCoordinate, setHoverCoordinate] = useState<Position | null>(null)
@@ -82,8 +82,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [boundaryRendered, setBoundaryRendered] = useState(false)
   const [snapPreview, setSnapPreview] = useState<SnapPreview | null>(null)
   const [selectedFloorId, setSelectedFloorId] = useState<string | null>(null)
-  const [isToolboxCollapsed, setIsToolboxCollapsed] = useState(false)
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  const [showFloorSelector, setShowFloorSelector] = useState(false)
+  const [selectedFeatureIds, setSelectedFeatureIds] = useState<string[]>([])
+  const [tagFilter, setTagFilter] = useState('')
+  const [inspectorDraft, setInspectorDraft] = useState({ name: '', tag: '', noteText: '' })
+  const [isSavingInspector, setIsSavingInspector] = useState(false)
+  const [isCreatingFloor, setIsCreatingFloor] = useState(false)
+  const [isUpdatingFloor, setIsUpdatingFloor] = useState(false)
 
   // --- Child project navigation ---
   const [projectStack, setProjectStack] = useState<Array<{ id: string; name: string }>>([])
@@ -108,32 +113,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     }
   }, [project])
 
-  const activeLayerId = useMemo(() => {
-    if (userActiveLayerId && layers.some((layer) => layer.id === userActiveLayerId)) {
-      return userActiveLayerId
-    }
-    return activeLayerForProject(layers)?.id ?? null
-  }, [userActiveLayerId, layers])
+  const mode = useMemo<DrawMode>(() => userMode, [userMode])
 
-  const activeLayer = useMemo(
-    () => layers.find((layer) => layer.id === activeLayerId) ?? activeLayerForProject(layers),
-    [activeLayerId, layers],
-  )
-
-  const mode = useMemo<DrawMode>(() => {
-    if (layerSupportsMode(activeLayer, userMode)) {
-      return userMode
-    }
-    return (
-      (['polygon', 'line', 'point'] as DrawMode[]).find((candidate) =>
-        layerSupportsMode(activeLayer, candidate),
-      ) ?? 'select'
-    )
-  }, [activeLayer, userMode])
-
-  const activeFeatureType = mode === 'delete' || mode === 'delete_lasso'
-    ? 'custom_area'
-    : featureTypeForLayer(activeLayer, mode)
+  const activeFeatureType = featureTypeForMode(mode)
   const draftCollection = draftToFeatures(mode, draftPoints, activeFeatureType, hoverCoordinate)
   const toolsEnabled = mapReady && boundaryRendered
 
@@ -145,7 +127,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   const hasFloors = floors.length > 0
   const floorRequired = project?.editorMode === 'building' || project?.editorMode === 'indoor'
-  const showFloorSelector = Boolean(floorRequired || hasFloors)
+  const canShowFloorSelector = Boolean(floorRequired || hasFloors)
   const canDrawOnFloor = !floorRequired || Boolean(selectedFloorId)
 
   // --- Sync refs ---
@@ -167,28 +149,45 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   useEffect(() => {
     draftPointsRef.current = draftPoints
   }, [draftPoints])
+  useEffect(() => {
+    selectedFeatureIdsRef.current = selectedFeatureIds
+  }, [selectedFeatureIds])
 
   useEffect(() => {
-    if (!canDrawOnFloor && userMode !== 'select') {
+    if (!canDrawOnFloor && !['select', 'move', 'edit_points'].includes(userMode)) {
       setUserMode('select')
     }
   }, [canDrawOnFloor, userMode])
 
+  useEffect(() => {
+    if (!map) return
+    if (mode === 'move') {
+      map.dragPan.enable()
+      map.getCanvas().style.cursor = 'grab'
+    } else {
+      map.dragPan.disable()
+      map.getCanvas().style.cursor = ''
+    }
+  }, [map, mode])
+
   // --- Stable callbacks ---
-  
   const handleSetMode = useCallback((newMode: DrawMode) => {
-    if (!canDrawOnFloor && newMode !== 'select') {
+    if (!canDrawOnFloor && !['select', 'move', 'edit_points'].includes(newMode)) {
       setMessage('Select a floor before drawing')
       return
     }
-    if (newMode !== 'select' && newMode !== 'delete' && newMode !== 'delete_lasso' && activeLayer && !layerSupportsMode(activeLayer, newMode)) {
-      const compatibleLayer = layers.find(l => layerSupportsMode(l, newMode))
-      if (compatibleLayer) {
-        setUserActiveLayerId(compatibleLayer.id)
-      }
-    }
     setUserMode(newMode)
-  }, [activeLayer, canDrawOnFloor, layers])
+  }, [canDrawOnFloor])
+
+  const handleZoomIn = useCallback(() => {
+    if (!map) return
+    map.zoomIn({ duration: 120 })
+  }, [map])
+
+  const handleZoomOut = useCallback(() => {
+    if (!map) return
+    map.zoomOut({ duration: 120 })
+  }, [map])
 
   const isMounted = useCallback(() => isMountedRef.current, [])
 
@@ -225,7 +224,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     if (mode === 'delete_lasso') {
       return
     }
-    const finalFeature = draftCollection?.features.find(
+    const persistedDraft = draftToFeatures(mode, draftPoints, activeFeatureType, null)
+    const finalFeature = persistedDraft?.features.find(
       (f) => !f.properties?.isDraftVertex && (f.geometry.type === 'Polygon' || f.geometry.type === 'LineString' || f.geometry.type === 'Point')
     )
     if (!project || !finalFeature || !toolsEnabled || !canDrawOnFloor) {
@@ -242,10 +242,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         properties: {
           ...(finalFeature.properties ?? {}),
           featureType: activeFeatureType,
-          layerId: activeLayer?.id ?? null,
-          layerName: activeLayer?.name ?? null,
-          minZoom: activeLayer?.minZoom ?? project.boundaryMinZoom,
-          maxZoom: activeLayer?.maxZoom ?? 24,
+          tag: '',
+          noteText: '',
+          minZoom: project.boundaryMinZoom,
+          maxZoom: 24,
           floorId: selectedFloorId ?? null,
         },
       })
@@ -253,8 +253,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         return
       }
       setVisibleFeatures((current) => [...current, response.feature])
-      setDraftPoints([])
       setMessage('Draft feature saved')
+      setDraftPoints([])
+      setUserMode('select')
     } catch (error) {
       if (isMountedRef.current) {
         setMessage(error instanceof Error ? error.message : 'Save failed')
@@ -266,10 +267,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     }
   }, [
     project,
-    draftCollection,
+    draftPoints,
     toolsEnabled,
     activeFeatureType,
-    activeLayer,
     selectedFloorId,
     canDrawOnFloor,
     mode,
@@ -301,14 +301,167 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           return !id || !featureIds.includes(String(id))
         }),
       )
+      setSelectedFeatureIds((current) => current.filter((id) => !featureIds.includes(id)))
       setMessage('Delete complete')
     },
     [project],
   )
 
-  const handleDeleteLasso = useCallback(async () => {
+  const handleMoveVertex = useCallback((featureId: string, vertexIndex: number, lng: number, lat: number) => {
+    setVisibleFeatures((current) =>
+      current.map((feature) => {
+        const id = String(feature.id ?? feature.properties?.id ?? '')
+        if (id !== featureId) return feature
+        const geometry = feature.geometry
+        if (!geometry) return feature
+        if (geometry.type === 'Point') {
+          return { ...feature, geometry: { ...geometry, coordinates: [lng, lat] } }
+        }
+        if (geometry.type === 'LineString') {
+          const next = [...geometry.coordinates]
+          if (vertexIndex < 0 || vertexIndex >= next.length) return feature
+          next[vertexIndex] = [lng, lat]
+          return { ...feature, geometry: { ...geometry, coordinates: next } }
+        }
+        if (geometry.type === 'Polygon') {
+          const ring = [...geometry.coordinates[0]]
+          if (vertexIndex < 0 || vertexIndex >= ring.length - 1) return feature
+          ring[vertexIndex] = [lng, lat]
+          ring[ring.length - 1] = ring[0]
+          return { ...feature, geometry: { ...geometry, coordinates: [ring] } }
+        }
+        return feature
+      }),
+    )
+  }, [])
+
+  const selectedFeatures = useMemo(() => {
+    if (selectedFeatureIds.length === 0) return []
+    const selectedSet = new Set(selectedFeatureIds)
+    return visibleFeatures.filter((feature) => selectedSet.has(String(feature.id ?? feature.properties?.id ?? '')))
+  }, [selectedFeatureIds, visibleFeatures])
+
+  useEffect(() => {
+    if (!project || selectedFeatures.length !== 1) {
+      setSelectedBuildingFeature(null)
+      return
+    }
+    const target = selectedFeatures[0]
+    if (project.editorMode === 'campus' && target.geometry.type === 'Polygon') {
+      setSelectedBuildingFeature(target)
+      return
+    }
+    setSelectedBuildingFeature(null)
+  }, [project, selectedFeatures])
+
+  useEffect(() => {
+    if (selectedFeatures.length === 1) {
+      const props = (selectedFeatures[0].properties ?? {}) as Record<string, unknown>
+      setInspectorDraft({
+        name: String(props.name ?? ''),
+        tag: String(props.tag ?? ''),
+        noteText: String(props.noteText ?? ''),
+      })
+      return
+    }
+    if (selectedFeatures.length > 1) {
+      setInspectorDraft((current) => ({ ...current, name: '' }))
+      return
+    }
+    setInspectorDraft({ name: '', tag: '', noteText: '' })
+  }, [selectedFeatures])
+
+  const handleSaveInspector = useCallback(async () => {
+    if (!project || selectedFeatures.length === 0) return
+    setIsSavingInspector(true)
+    setMessage('Saving inspector changes...')
+    try {
+      const updates = await Promise.all(
+        selectedFeatures.map(async (feature) => {
+          const next = {
+            ...feature,
+            properties: {
+              ...(feature.properties ?? {}),
+              ...(selectedFeatures.length === 1 ? { name: inspectorDraft.name } : {}),
+              tag: inspectorDraft.tag,
+              noteText: inspectorDraft.noteText,
+              floorId: (feature.properties as Record<string, unknown> | undefined)?.floorId ?? selectedFloorId ?? null,
+            },
+          }
+          const response = await saveDrawingFeature(project.id, next)
+          return response.feature
+        }),
+      )
+      if (!isMountedRef.current) return
+      setVisibleFeatures((current) => {
+        const byId = new Map(updates.map((feature) => [String(feature.id ?? feature.properties?.id ?? ''), feature]))
+        return current.map((feature) => byId.get(String(feature.id ?? feature.properties?.id ?? '')) ?? feature)
+      })
+      setMessage('Inspector changes saved')
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Save metadata failed')
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsSavingInspector(false)
+      }
+    }
+  }, [inspectorDraft.name, inspectorDraft.noteText, inspectorDraft.tag, project, selectedFeatures, selectedFloorId])
+
+  const handlePersistMovedFeatures = useCallback(async () => {
+    if (!project || selectedFeatures.length === 0) return
+    try {
+      await Promise.all(selectedFeatures.map((feature) => saveDrawingFeature(project.id, feature)))
+      if (isMountedRef.current) {
+        setMessage('Feature move saved')
+      }
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Move save failed')
+      }
+    }
+  }, [project, selectedFeatures])
+
+  const handleQuickCreateTextBox = useCallback(async (start: Position, end: Position) => {
+    if (!project || !toolsEnabled || !canDrawOnFloor) {
+      if (!canDrawOnFloor) setMessage('Select a floor before adding text')
+      return
+    }
+    const value = window.prompt('Text content', 'New text')
+    if (!value || !value.trim()) return
+    const p1: Position = [start[0], start[1]]
+    const p2: Position = [end[0], start[1]]
+    const p3: Position = [end[0], end[1]]
+    const p4: Position = [start[0], end[1]]
+    try {
+      const response = await saveDrawingFeature(project.id, {
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [[p1, p2, p3, p4, p1]] },
+        properties: {
+          featureType: 'text_label',
+          text: value.trim(),
+          name: value.trim(),
+          tag: value.trim(),
+          noteText: '',
+          floorId: selectedFloorId ?? null,
+          minZoom: project.boundaryMinZoom,
+          maxZoom: 24,
+        },
+      } as Feature)
+      if (!isMountedRef.current) return
+      setVisibleFeatures((current) => [...current, response.feature])
+      setMessage('Text added')
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Create text failed')
+      }
+    }
+  }, [canDrawOnFloor, project, selectedFloorId, toolsEnabled])
+
+  const handleLassoSelection = useCallback(() => {
     if (!project || draftPoints.length < 3) {
-      setMessage('Draw a lasso area to delete')
+      setMessage('Draw a lasso area to select')
       return
     }
     const ring = [...draftPoints, draftPoints[0]]
@@ -331,6 +484,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     }
 
     const pointInPolygon = (point: Position) => pointInRing(point, ring)
+    const lassoCentroid: Position = ring.reduce<Position>(
+      (acc, cur) => [acc[0] + cur[0] / ring.length, acc[1] + cur[1] / ring.length],
+      [0, 0],
+    )
 
     const intersectsLasso = (feature: Feature) => {
       const geometry = feature.geometry
@@ -342,7 +499,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         return (geometry.coordinates as Position[]).some((coord) => pointInPolygon(coord))
       }
       if (geometry.type === 'Polygon') {
-        return geometry.coordinates.some((ringCoords) => ringCoords.some((coord) => pointInPolygon(coord as Position)))
+        const outer = geometry.coordinates[0] as Position[] | undefined
+        if (!outer || outer.length === 0) return false
+        const hasFeatureVertexInsideLasso = geometry.coordinates.some((ringCoords) =>
+          ringCoords.some((coord) => pointInPolygon(coord as Position)),
+        )
+        if (hasFeatureVertexInsideLasso) return true
+        return pointInRing(lassoCentroid, outer)
       }
       return false
     }
@@ -352,10 +515,11 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       .map((feature) => feature.id ?? feature.properties?.id)
       .filter((id): id is string | number => Boolean(id))
       .map((id) => String(id))
-
-    await handleDeleteFeatures(featureIds)
+    setSelectedFeatureIds(featureIds)
+    setMessage(featureIds.length > 0 ? `Selected ${featureIds.length} object(s)` : 'No objects selected')
     setDraftPoints([])
-  }, [draftPoints, handleDeleteFeatures, project, visibleFeatures])
+    setUserMode('select')
+  }, [draftPoints, project, visibleFeatures])
 
   useDrawingEngine({
     map,
@@ -365,16 +529,21 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     modeRef,
     snapPreviewRef,
     draftPointsRef,
+    selectedFeatureIdsRef,
     onAddPoint: setDraftPoints,
     onSaveDraft: () => {
       if (modeRef.current === 'delete_lasso') {
-        handleDeleteLasso()
+        handleLassoSelection()
         return
       }
       handleSaveDraft()
     },
     onMessage: handleMessage,
+    onSetSelection: setSelectedFeatureIds,
     onDeleteFeatures: handleDeleteFeatures,
+    onMoveVertex: handleMoveVertex,
+    onMoveVertexEnd: handlePersistMovedFeatures,
+    onQuickCreateTextBox: handleQuickCreateTextBox,
   })
 
   useMapRenderer({
@@ -385,6 +554,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     project,
     projectConfig,
     visibleFeatures,
+    selectedFeatureIds,
+    activeMode: mode,
     draftCollection,
     snapPreview,
     isMounted,
@@ -400,24 +571,19 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     const loadProjectData = async () => {
       if (isMountedRef.current) {
         setProject(null)
-        setLayers([])
         setVisibleFeatures([])
         setDraftPoints([])
-        setUserActiveLayerId(null)
         setUserMode('select')
+        setSelectedFeatureIds([])
         setBoundaryRendered(false)
         setMessage('Loading project...')
       }
       try {
-        const [nextProject, nextLayers] = await Promise.all([
-          fetchDrawingProject(activeProjectId, abortController.signal),
-          fetchDrawingProjectLayers(activeProjectId, abortController.signal),
-        ])
+        const nextProject = await fetchDrawingProject(activeProjectId, abortController.signal)
         if (!isMountedRef.current || abortController.signal.aborted) {
           return
         }
         setProject(nextProject)
-        setLayers(nextLayers)
         setVisibleFeatures([])
         // Auto-select first floor if project has floors
         if (nextProject.floors.length > 0) {
@@ -425,6 +591,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         } else {
           setSelectedFloorId(null)
         }
+        setShowFloorSelector(false)
         setMessage('Project data loaded')
       } catch (error) {
         if (!isMountedRef.current || abortController.signal.aborted) {
@@ -441,24 +608,60 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   }, [activeProjectId])
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 1024px)')
-    const handleCollapse = () => {
-      if (mediaQuery.matches) {
-        setIsToolboxCollapsed(true)
-        setIsSidebarCollapsed(true)
+    const handleModeShortcuts = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase()
+      if ((event.target as HTMLElement | null)?.tagName === 'INPUT' || (event.target as HTMLElement | null)?.tagName === 'TEXTAREA') {
+        return
+      }
+      if (key === 'v') {
+        event.preventDefault()
+        handleSetMode('select')
+      } else if (key === 'm') {
+        event.preventDefault()
+        handleSetMode('move')
+      } else if (key === 'e') {
+        event.preventDefault()
+        handleSetMode('edit_points')
+      } else if (key === 't') {
+        event.preventDefault()
+        handleSetMode('text')
+      } else if (key === 'n') {
+        event.preventDefault()
+        handleSetMode('pen')
+      } else if (key === 'l' && event.shiftKey) {
+        event.preventDefault()
+        handleSetMode('delete_lasso')
+      } else if (key === 'l') {
+        event.preventDefault()
+        handleSetMode('line')
+      } else if (key === 'r') {
+        event.preventDefault()
+        handleSetMode('polygon')
+      } else if (key === 'b') {
+        event.preventDefault()
+        handleSetMode('rectangle')
+      } else if (key === 'o') {
+        event.preventDefault()
+        handleSetMode('ellipse')
+      } else if (key === '+' || key === '=') {
+        event.preventDefault()
+        handleZoomIn()
+      } else if (key === '-' || key === '_') {
+        event.preventDefault()
+        handleZoomOut()
       }
     }
-    handleCollapse()
-    mediaQuery.addEventListener('change', handleCollapse)
-    return () => mediaQuery.removeEventListener('change', handleCollapse)
-  }, [])
+    window.addEventListener('keydown', handleModeShortcuts)
+    return () => {
+      window.removeEventListener('keydown', handleModeShortcuts)
+    }
+  }, [handleSetMode, handleZoomIn, handleZoomOut])
 
   // --- Visible feature loading ---
   useEffect(() => {
     if (!map || !project || !mapReady) {
       return
     }
-    const currentActiveLayerId = activeLayer?.id ?? null
     if (featureFetchTimerRef.current) {
       window.clearTimeout(featureFetchTimerRef.current)
     }
@@ -473,7 +676,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             projectId: project.id,
             bbox: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()],
             zoom: map.getZoom(),
-            layerId: currentActiveLayerId,
+            layerId: null,
             floorId: selectedFloorId,
           },
           abortController.signal,
@@ -482,6 +685,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           return
         }
         setVisibleFeatures(nextFeatures)
+        const visibleIds = new Set(
+          nextFeatures
+            .map((feature) => String(feature.id ?? feature.properties?.id ?? ''))
+            .filter(Boolean),
+        )
+        setSelectedFeatureIds((current) => current.filter((id) => visibleIds.has(id)))
       } catch (error) {
         if (!isMountedRef.current || abortController.signal.aborted) {
           return
@@ -497,7 +706,30 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       }
       visibleFeaturesRequestRef.current?.abort()
     }
-  }, [activeLayer?.id, mapZoom, project, map, mapReady, selectedFloorId])
+  }, [mapZoom, project, map, mapReady, selectedFloorId])
+
+  // Ensure we always auto-focus boundary when entering/opening a project.
+  useEffect(() => {
+    if (!map || !mapReady || !mapLoaded || !project) return
+    if (fittedProjectIdRef.current === project.id) return
+
+    const [minLng, minLat, maxLng, maxLat] = project.bbox
+    const fit = () => {
+      map.resize()
+      map.fitBounds(
+        [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ],
+        { padding: { top: 80, right: 100, bottom: 90, left: 100 }, duration: 0 },
+      )
+      fittedProjectIdRef.current = project.id
+    }
+
+    requestAnimationFrame(fit)
+    const retryTimer = window.setTimeout(fit, 180)
+    return () => window.clearTimeout(retryTimer)
+  }, [map, mapLoaded, mapReady, project])
 
   const handlePublish = async () => {
     if (!project) {
@@ -511,7 +743,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         return
       }
       setProject(response.project)
-      setLayers(response.project.layers)
       setVisibleFeatures(response.project.features)
       setMessage('Project published')
     } catch (error) {
@@ -534,6 +765,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       ? Math.max(...project.floors.map((floor) => floor.sortOrder)) + 1
       : 1
     setMessage('Creating floor...')
+    setIsCreatingFloor(true)
     try {
       const response = await createProjectFloor(project.id, {
         label: `F${nextLevel}`,
@@ -549,8 +781,65 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       if (isMountedRef.current) {
         setMessage(error instanceof Error ? error.message : 'Create floor failed')
       }
+    } finally {
+      if (isMountedRef.current) {
+        setIsCreatingFloor(false)
+      }
     }
   }, [project])
+
+  const handleUpdateFloor = useCallback(async (floor: { id: string; label: string; code: string; level: number; elevation?: number; visible: boolean; sortOrder: number }, updates: { label?: string; code?: string }) => {
+    if (!project) return
+    const nextLabel = (updates.label ?? floor.label).trim()
+    const nextCode = (updates.code ?? floor.code).trim()
+    if (!nextLabel || !nextCode) {
+      setMessage('Floor label and code cannot be empty')
+      return
+    }
+    setIsUpdatingFloor(true)
+    setMessage('Updating floor...')
+    try {
+      const response = await updateProjectFloor(project.id, floor.id, {
+        label: nextLabel,
+        code: nextCode,
+        level: floor.level,
+        elevation: floor.elevation,
+        visible: floor.visible,
+        sortOrder: floor.sortOrder,
+      })
+      if (!isMountedRef.current) return
+      setProject((current) => (current ? { ...current, floors: response.floors } : current))
+      setMessage('Floor updated')
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Update floor failed')
+      }
+    } finally {
+      if (isMountedRef.current) setIsUpdatingFloor(false)
+    }
+  }, [project])
+
+  const handleDeleteFloor = useCallback(async (floor: { id: string }) => {
+    if (!project) return
+    setIsUpdatingFloor(true)
+    setMessage('Deleting floor...')
+    try {
+      const response = await deleteProjectFloor(project.id, floor.id)
+      if (!isMountedRef.current) return
+      setProject((current) => (current ? { ...current, floors: response.floors } : current))
+      if (selectedFloorId === floor.id) {
+        const next = [...response.floors].sort((a, b) => a.sortOrder - b.sortOrder)[0]
+        setSelectedFloorId(next?.id ?? null)
+      }
+      setMessage('Floor deleted')
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Delete floor failed')
+      }
+    } finally {
+      if (isMountedRef.current) setIsUpdatingFloor(false)
+    }
+  }, [project, selectedFloorId])
 
   // --- Child project navigation handlers ---
   const handleOpenChildProject = useCallback(async (childProjectId: string) => {
@@ -601,7 +890,24 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   }, [project?.name, projectStack])
 
   return (
-    <div className="flex h-screen min-h-screen bg-slate-100 text-slate-950">
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-950 text-slate-100">
+      <EditorStructurePanel
+        project={project}
+        floors={floors}
+        selectedFloorId={selectedFloorId}
+        onSelectFloor={setSelectedFloorId}
+        selectedFeatureIds={selectedFeatureIds}
+        onSelectFeatureIds={setSelectedFeatureIds}
+        visibleFeatures={visibleFeatures}
+        tagFilter={tagFilter}
+        onTagFilterChange={setTagFilter}
+        onCreateFloor={handleCreateFloor}
+        isCreatingFloor={isCreatingFloor}
+        onUpdateFloor={handleUpdateFloor}
+        onDeleteFloor={handleDeleteFloor}
+        isUpdatingFloor={isUpdatingFloor}
+      />
+
       <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-900">
         <div
           ref={containerRef}
@@ -610,13 +916,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         />
         <EditorToolbox
           mode={mode}
-          layers={layers}
           toolsEnabled={toolsEnabled}
           isSaving={isSaving}
           floorRequired={Boolean(floorRequired)}
           hasFloorSelection={Boolean(selectedFloorId)}
-          isCollapsed={isToolboxCollapsed}
-          onToggleCollapsed={() => setIsToolboxCollapsed((value) => !value)}
           onSetMode={handleSetMode}
           onClearDraft={() => setDraftPoints([])}
         />
@@ -631,8 +934,20 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           onSaveDraft={handleSaveDraft}
           onPublish={handlePublish}
           onBack={onBack}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          zoomLabel={`${Math.round(mapZoom * 10) / 10}x`}
         />
-        {showFloorSelector ? (
+        {canShowFloorSelector ? (
+          <button
+            type="button"
+            className="absolute right-4 top-4 z-30 rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-1.5 text-xs font-semibold text-slate-100 shadow-lg"
+            onClick={() => setShowFloorSelector((value) => !value)}
+          >
+            Floors
+          </button>
+        ) : null}
+        {canShowFloorSelector && showFloorSelector ? (
           <FloorSelector
             floors={floors}
             selectedFloorId={selectedFloorId}
@@ -670,8 +985,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       <EditorSidebar
         project={project}
         projectConfig={projectConfig}
-        layers={layers}
-        activeLayer={activeLayer}
+        floors={floors}
+        selectedFloorId={selectedFloorId}
         mapZoom={mapZoom}
         mapReady={mapReady}
         boundaryRendered={boundaryRendered}
@@ -680,10 +995,11 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         hoverCoordinate={hoverCoordinate}
         snapPreview={snapPreview}
         message={message}
-        onSelectLayer={setUserActiveLayerId}
-        onClearDraft={() => setDraftPoints([])}
-        isCollapsed={isSidebarCollapsed}
-        onToggleCollapsed={() => setIsSidebarCollapsed((value) => !value)}
+        selectedFeatures={selectedFeatures}
+        inspectorDraft={inspectorDraft}
+        onInspectorDraftChange={setInspectorDraft}
+        onSaveInspector={handleSaveInspector}
+        isSavingInspector={isSavingInspector}
       />
     </div>
   )

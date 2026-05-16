@@ -113,15 +113,7 @@ export type ProjectSource = 'openstreetmap' | 'manual' | 'imported'
 
 export type ProjectStatus = 'draft' | 'published' | 'archived'
 
-export interface SpatialLayer {
-  id: string
-  name: string
-  locked: boolean
-  visible: boolean
-  minZoom?: number
-  maxZoom?: number
-  featureTypes?: string[]
-}
+// SpatialLayer removed: floors are used as the primary grouping for features
 
 export type FloorScope = 'single' | 'multiple' | 'global'
 
@@ -177,7 +169,6 @@ export interface DrawingProject {
   boundaryMinZoom: number
   detailMinZoom: number
   indoorMinZoom: number | null
-  layers: SpatialLayer[]
   floors: SpatialFloor[]
   features: Feature[]
   parentProjectId?: string | null

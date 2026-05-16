@@ -1,14 +1,20 @@
-import { Check, ChevronLeft, ChevronRight, MapPinned } from 'lucide-react'
+import { Info, Save } from 'lucide-react'
 import type { Feature, Position } from 'geojson'
-import type { DrawingProject, ProjectCanvasConfig, SpatialLayer } from '../types/drone'
+import type { DrawingProject, ProjectCanvasConfig, SpatialFloor } from '../types/drone'
 import type { SnapPreview } from '../hooks/useSnapEngine'
 import { featureMeasurement, localCoordinates } from '../hooks/useDrawingEngine'
+
+interface InspectorDraft {
+  name: string
+  tag: string
+  noteText: string
+}
 
 interface EditorSidebarProps {
   project: DrawingProject | null
   projectConfig: ProjectCanvasConfig
-  layers: SpatialLayer[]
-  activeLayer: SpatialLayer | null
+  floors: SpatialFloor[]
+  selectedFloorId: string | null
   mapZoom: number
   mapReady: boolean
   boundaryRendered: boolean
@@ -17,27 +23,18 @@ interface EditorSidebarProps {
   hoverCoordinate: Position | null
   snapPreview: SnapPreview | null
   message: string
-  onSelectLayer: (layerId: string) => void
-  onClearDraft: () => void
-  isCollapsed: boolean
-  onToggleCollapsed: () => void
+  selectedFeatures: Feature[]
+  inspectorDraft: InspectorDraft
+  onInspectorDraftChange: (next: InspectorDraft) => void
+  onSaveInspector: () => void
+  isSavingInspector: boolean
 }
-
-const modeSummary = {
-  region: 'Region tools for routes, zones, waypoints, and obstacles.',
-  agriculture: 'Agriculture tools for crop areas, survey paths, and flight planning.',
-  campus: 'Campus tools for buildings, gates, roads, and outdoor drone routes.',
-  parking: 'Parking tools for slots, entrances, exits, and circulation routes.',
-  building: 'Indoor building tools with room, wall, door, and route workflows.',
-  indoor: 'Indoor tools with floor-aware geometry and navigation features.',
-  custom: 'Generic polygon, line, and point editing for custom spaces.',
-} as const
 
 export function EditorSidebar({
   project,
   projectConfig,
-  layers,
-  activeLayer,
+  floors,
+  selectedFloorId,
   mapZoom,
   mapReady,
   boundaryRendered,
@@ -46,175 +43,102 @@ export function EditorSidebar({
   hoverCoordinate,
   snapPreview,
   message,
-  onSelectLayer,
-  onClearDraft,
-  isCollapsed,
-  onToggleCollapsed,
+  selectedFeatures,
+  inspectorDraft,
+  onInspectorDraftChange,
+  onSaveInspector,
+  isSavingInspector,
 }: EditorSidebarProps) {
   const localOrigin: Position | null = project ? [project.bbox[0], project.bbox[1]] : null
   const hoverLocal = hoverCoordinate && localOrigin ? localCoordinates(hoverCoordinate, localOrigin) : null
-  const ToggleIcon = isCollapsed ? ChevronLeft : ChevronRight
+  const activeFloor = floors.find((floor) => floor.id === selectedFloorId)
+  const isMultiSelect = selectedFeatures.length > 1
 
   return (
-    <aside className={`relative flex h-full border-l border-slate-200 bg-white ${isCollapsed ? 'w-10' : 'w-[380px] max-w-[42vw]'}`}>
-      <button
-        type="button"
-        className="absolute -left-3 top-6 z-30 flex size-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-md transition hover:bg-slate-50"
-        onClick={onToggleCollapsed}
-        aria-label={isCollapsed ? 'Expand side panel' : 'Collapse side panel'}
-      >
-        <ToggleIcon className="size-4" aria-hidden="true" />
-      </button>
-
-      {isCollapsed ? (
-        <div className="flex h-full w-full flex-col items-center justify-center text-[10px] uppercase tracking-wide text-slate-400">
-          Info
+    <aside className="flex h-full w-[340px] max-w-[36vw] flex-col border-l border-slate-800 bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 px-4 py-3">
+        <div className="text-sm font-semibold text-sky-300">Inspector</div>
+        <div className="mt-1 text-xs text-slate-400">
+          {selectedFeatures.length === 0
+            ? 'Select an object to edit metadata'
+            : isMultiSelect
+              ? `${selectedFeatures.length} objects selected`
+              : `1 object selected`}
         </div>
-      ) : (
-        <div className="flex h-full w-full flex-col">
-          <header className="border-b border-slate-200 px-4 py-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-sky-700">
-          <MapPinned className="size-4" aria-hidden="true" />
-          Spatial Editor
-        </div>
-        <h1 className="mt-1 text-lg font-semibold text-slate-950">
-          {project?.name ?? 'Loading project'}
-        </h1>
-        {project ? (
-          <p className="mt-1 text-sm capitalize text-slate-500">
-            {project.editorMode} · {project.status} · {project.source}
-          </p>
-        ) : null}
-          </header>
+      </header>
 
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <section>
-          <h2 className="text-sm font-semibold text-slate-950">Mode</h2>
-          <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            {project ? modeSummary[project.editorMode] : 'Loading project mode...'}
-          </p>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        <section className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Properties</h3>
+          <div className="mt-2 space-y-2">
+            <label className="block">
+              <span className="mb-1 block text-xs text-slate-400">Name</span>
+              <input
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm outline-none ring-sky-400 focus:ring"
+                value={inspectorDraft.name}
+                onChange={(event) => onInspectorDraftChange({ ...inspectorDraft, name: event.target.value })}
+                disabled={selectedFeatures.length === 0 || isMultiSelect}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-slate-400">Tag</span>
+              <input
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm outline-none ring-sky-400 focus:ring"
+                value={inspectorDraft.tag}
+                onChange={(event) => onInspectorDraftChange({ ...inspectorDraft, tag: event.target.value })}
+                disabled={selectedFeatures.length === 0}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-slate-400">Note</span>
+              <textarea
+                rows={4}
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm outline-none ring-sky-400 focus:ring"
+                value={inspectorDraft.noteText}
+                onChange={(event) => onInspectorDraftChange({ ...inspectorDraft, noteText: event.target.value })}
+                disabled={selectedFeatures.length === 0}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={onSaveInspector}
+              disabled={selectedFeatures.length === 0 || isSavingInspector}
+              className="inline-flex items-center gap-1 rounded-md border border-sky-500/50 bg-sky-500/20 px-2.5 py-1.5 text-sm text-sky-100 transition hover:bg-sky-500/30 disabled:opacity-50"
+            >
+              <Save className="size-3.5" /> Save metadata
+            </button>
+          </div>
         </section>
 
-        <section>
-          <h2 className="text-sm font-semibold text-slate-950">Layers</h2>
-          <ul className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200">
-            {layers.map((layer) => (
-              <li key={layer.id}>
-                <button
-                  type="button"
-                  className={`flex w-full items-center justify-between px-3 py-2 text-sm ${activeLayer?.id === layer.id ? 'bg-sky-50' : 'bg-white'
-                    }`}
-                  onClick={() => {
-                    if (!layer.locked) {
-                      onSelectLayer(layer.id)
-                      onClearDraft()
-                    }
-                  }}
-                  disabled={layer.locked}
-                >
-                  <span>
-                    {layer.name}
-                    <span className="ml-2 text-xs text-slate-500">
-                      z{layer.minZoom ?? 0}-{layer.maxZoom ?? 24}
-                    </span>
-                  </span>
-                  {layer.locked ? (
-                    <span className="text-xs font-medium text-slate-500">Locked</span>
-                  ) : activeLayer?.id === layer.id ? (
-                    <span className="text-xs font-medium text-sky-700">Active</span>
-                  ) : (
-                    <Check className="size-4 text-emerald-600" aria-hidden="true" />
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
+        <section className="rounded-lg border border-slate-800 bg-slate-900 p-3 text-sm text-slate-300">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Workspace</h3>
+          <div className="mt-2 space-y-1">
+            <div>Floor: {activeFloor?.label ?? 'None'}</div>
+            <div>Zoom: {mapZoom.toFixed(1)}</div>
+            <div>Visible objects: {visibleFeatures.length}</div>
+            <div>Precision: {mapZoom >= projectConfig.precisionZoom ? 'on' : 'off'}</div>
+          </div>
         </section>
 
-        <section>
-          <h2 className="text-sm font-semibold text-slate-950">Workspace</h2>
-          <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            Active layer: {activeLayer?.name ?? 'None'} · Zoom {mapZoom.toFixed(1)} ·
-            {mapZoom >= projectConfig.precisionZoom
-              ? ' Precision scale'
-              : mapZoom >= projectConfig.detailZoom
-                ? ' Object scale'
-                : ' Region scale'}
-          </p>
+        <section className="rounded-lg border border-slate-800 bg-slate-900 p-3 text-sm text-slate-300">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status</h3>
+          <div className="mt-2 space-y-1">
+            <div>Map ready: {mapReady ? 'yes' : 'no'}</div>
+            <div>Boundary ready: {boundaryRendered ? 'yes' : 'no'}</div>
+            <div>Snap: {projectConfig.snapping.enabled ? (snapPreview ? `locked ${snapPreview.kind}` : 'enabled') : 'disabled'}</div>
+            <div className="font-mono text-xs">Cursor: {hoverCoordinate ? `${hoverCoordinate[1].toFixed(6)}, ${hoverCoordinate[0].toFixed(6)}` : '-'}</div>
+            <div className="font-mono text-xs">Local: {hoverLocal ? `X ${hoverLocal.x.toFixed(2)}m · Y ${hoverLocal.y.toFixed(2)}m` : '-'}</div>
+            <div>{featureMeasurement(draftFeature)}</div>
+          </div>
         </section>
 
-        {project && project.floors.length > 1 ? (
-          <section>
-            <h2 className="text-sm font-semibold text-slate-950">Floors</h2>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {project.floors.map((floor) => (
-                <button
-                  key={floor.id}
-                  type="button"
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700"
-                  disabled
-                >
-                  {floor.label}
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        <section>
-          <h2 className="text-sm font-semibold text-slate-950">Inspector</h2>
-          <dl className="mt-2 space-y-2 rounded-lg border border-slate-200 p-3 text-sm">
-            <div>
-              <dt className="text-slate-500">Cursor</dt>
-              <dd className="font-mono text-xs text-slate-950">
-                {hoverCoordinate
-                  ? `${hoverCoordinate[1].toFixed(6)}, ${hoverCoordinate[0].toFixed(6)}`
-                  : '-'}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Local</dt>
-              <dd className="font-mono text-xs text-slate-950">
-                {hoverLocal
-                  ? `X ${hoverLocal.x.toFixed(2)}m · Y ${hoverLocal.y.toFixed(2)}m`
-                  : '-'}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Measurement</dt>
-              <dd className="text-slate-950">{featureMeasurement(draftFeature)}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Visible features</dt>
-              <dd className="text-slate-950">{visibleFeatures.length}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Map ready</dt>
-              <dd className="text-slate-950">{mapReady ? 'yes' : 'no'}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Boundary ready</dt>
-              <dd className="text-slate-950">{boundaryRendered ? 'yes' : 'no'}</dd>
-            </div>
-            <div>
-              <dt className="text-slate-500">Snapping</dt>
-              <dd className="text-slate-950">
-                {projectConfig.snapping.enabled
-                  ? snapPreview
-                    ? `Locked to ${snapPreview.kind}`
-                    : 'Enabled'
-                  : 'Disabled'}
-              </dd>
-            </div>
-          </dl>
-        </section>
-
-        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          {message}
-        </p>
+        <div className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">
+          <div className="flex items-start gap-2">
+            <Info className="mt-0.5 size-4 text-slate-400" />
+            <span>{message}</span>
           </div>
         </div>
-      )}
+      </div>
     </aside>
   )
 }
