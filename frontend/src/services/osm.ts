@@ -142,15 +142,16 @@ function asCandidateType(value: string | undefined): OsmElementType | null {
   return null
 }
 
-export async function fetchNearbyOsmCandidates(
+export async function fetchEnclosingOsmElements(
   lat: number,
   lon: number,
 ): Promise<OsmCandidate[]> {
   const overpassQuery = `
 [out:json][timeout:10];
+is_in(${lat},${lon})->.areas;
 (
-  way(around:25,${lat},${lon});
-  relation(around:25,${lat},${lon});
+  way(pivot.areas);
+  relation(pivot.areas);
 );
 out tags geom;
 `
@@ -170,12 +171,18 @@ out tags geom;
   const data = (await response.json()) as OverpassResponse
   const elements = data.elements ?? []
   const candidates: OsmCandidate[] = []
+  const seen = new Set<string>()
 
   for (const element of elements) {
     const type = asCandidateType(element.type)
     if (!type || typeof element.id !== 'number') {
       continue
     }
+    const dedupeKey = `${type}:${element.id}`
+    if (seen.has(dedupeKey)) {
+      continue
+    }
+    seen.add(dedupeKey)
 
     const tags = asTags(element.tags)
     const geometry = asGeometryPoints(element.geometry)

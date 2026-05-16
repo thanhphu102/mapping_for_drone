@@ -36,6 +36,11 @@ const rasterOsmStyle: StyleSpecification = {
   ],
 }
 
+interface MapLibreWithSupport {
+  version?: string
+  supported?: () => boolean
+}
+
 export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<Map | null>(null)
@@ -59,9 +64,8 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
       fadeDuration: 0,
     })
 
-    // Debug info: log MapLibre version (may be undefined in some builds)
-    // eslint-disable-next-line no-console
-    console.info('maplibre-gl version:', (maplibregl as any).version)
+    const maplibreInfo = maplibregl as MapLibreWithSupport
+    console.info('maplibre-gl version:', maplibreInfo.version)
 
     // Create a small debug overlay inside the map container to surface status
     let debugEl: HTMLDivElement | null = null
@@ -85,11 +89,11 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
     // create a temporary canvas and probe getContext('webgl2'|'webgl'|'experimental-webgl')
     let webglSupported: boolean | undefined = undefined
     try {
-      const supportedFn = (maplibregl as any).supported
+      const supportedFn = maplibreInfo.supported
       if (typeof supportedFn === 'function') {
         webglSupported = supportedFn()
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
 
@@ -98,13 +102,12 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
         const probeCanvas = document.createElement('canvas')
         const ctx = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl') || probeCanvas.getContext('experimental-webgl')
         webglSupported = !!ctx
-      } catch (e) {
+      } catch {
         webglSupported = false
       }
     }
 
     // Log and show support status
-    // eslint-disable-next-line no-console
     console.info('MapLibre supported (WebGL available):', webglSupported)
     if (debugEl) {
       debugEl.textContent = `Map: init (WebGL=${String(webglSupported)})`
@@ -115,7 +118,7 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
     // result in a 0px height. We only set inline styles when computed height is 0.
     try {
       let el: HTMLElement | null = containerRef.current
-      const stack: Array<{tag: string; h: number}> = []
+      const stack: Array<{ tag: string; h: number }> = []
       while (el && el !== document.body && el !== document.documentElement) {
         const rect = el.getBoundingClientRect()
         stack.push({ tag: el.tagName.toLowerCase(), h: Math.round(rect.height) })
@@ -126,10 +129,8 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
         }
         el = el.parentElement
       }
-      // Log the ancestor heights for debugging
-      // eslint-disable-next-line no-console
       console.info('Map container ancestor heights:', stack)
-    } catch (e) {
+    } catch {
       // ignore
     }
 

@@ -1,7 +1,27 @@
-version: '3.8'
 services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: mapping
+      POSTGRES_USER: mapping
+      POSTGRES_PASSWORD: mapping
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mapping -d mapping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     image: python:3.11-slim
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://mapping:mapping@db:5432/mapping
     volumes:
       - ./:/app
     working_dir: /app
@@ -16,3 +36,6 @@ services:
       - ./:/app
     working_dir: /app
     command: bash -lc "pip install -r requirements.txt && python drone_sim.py --id sim1"
+
+volumes:
+  postgis_data:

@@ -1,3 +1,5 @@
 venv
 leaflet
 .github
+backend/data/
+backend/__pycache__/
