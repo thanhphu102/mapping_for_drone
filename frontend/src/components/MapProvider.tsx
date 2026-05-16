@@ -16,12 +16,34 @@ export function useMapContext() {
 
 const editorStyle: maplibregl.StyleSpecification = {
   version: 8,
-  sources: {},
+  sources: {
+    osm: {
+      type: 'raster',
+      tiles: [
+        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      ],
+      tileSize: 256,
+      attribution: '&copy; OpenStreetMap contributors',
+    },
+  },
   layers: [
     {
-      id: 'background',
+      id: 'editor-background',
       type: 'background',
-      paint: { 'background-color': '#f3f4f6' },
+      paint: { 'background-color': '#e5e7eb' },
+    },
+    {
+      id: 'editor-osm-basemap',
+      type: 'raster',
+      source: 'osm',
+      paint: {
+        'raster-opacity': 0.28,
+        'raster-saturation': -0.75,
+        'raster-brightness-min': 0.18,
+        'raster-brightness-max': 0.95,
+      },
     },
   ],
 }

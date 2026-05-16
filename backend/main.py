@@ -6,6 +6,7 @@ import json
 import os
 import math
 import time
+import ssl
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Literal
@@ -126,10 +127,13 @@ def fetch_osm_full(osm_type: OsmType, osm_id: int) -> Dict[str, Any]:
         url,
         headers={"User-Agent": "mapping-for-drone-spatial-editor/0.1"},
     )
+    ctx = ssl._create_unverified_context()
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=20, context=ctx) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
+        print(f"OSM API request failed URL: {url}")
+        print(f"OSM API request exception: {repr(exc)}")
         raise HTTPException(status_code=502, detail=f"OSM API request failed: {exc}") from exc
 
 
