@@ -17,8 +17,8 @@ export function FloorSelector({
 }: FloorSelectorProps) {
   if (floors.length === 0) {
     return (
-      <div className="floor-selector absolute right-4 top-1/2 z-20 flex -translate-y-1/2 flex-col rounded-xl border border-slate-200/80 bg-white/95 p-3 text-xs shadow-lg backdrop-blur-sm">
-        <div className="font-semibold text-slate-700">No floors yet</div>
+      <div className="floor-selector absolute right-4 top-1/2 z-20 flex -translate-y-1/2 flex-col rounded-xl border border-slate-200 bg-white/95 p-3 text-xs shadow-lg backdrop-blur-sm">
+        <div className="font-semibold text-slate-800">No floors yet</div>
         <p className="mt-1 text-slate-500">
           {isRequired ? 'Select or create a floor to draw indoor features.' : 'Create a floor to start drawing.'}
         </p>
@@ -37,7 +37,7 @@ export function FloorSelector({
   const sortedFloors = [...floors].sort((a, b) => b.level - a.level)
 
   return (
-    <div className="floor-selector absolute right-4 top-1/2 z-20 flex -translate-y-1/2 flex-col rounded-xl border border-slate-200/80 bg-white/95 shadow-lg backdrop-blur-sm">
+    <div className="floor-selector absolute right-4 top-1/2 z-20 flex -translate-y-1/2 flex-col rounded-xl border border-slate-200 bg-white/95 shadow-lg backdrop-blur-sm">
       {sortedFloors.map((floor) => {
         const isSelected = floor.id === selectedFloorId
         return (
@@ -47,7 +47,7 @@ export function FloorSelector({
             className={`floor-selector-btn relative flex h-10 w-12 items-center justify-center text-sm font-semibold transition-all first:rounded-t-xl last:rounded-b-xl ${
               isSelected
                 ? 'bg-sky-600 text-white shadow-inner'
-                : 'text-slate-700 hover:bg-sky-50 hover:text-sky-700'
+                : 'bg-white text-slate-800 hover:bg-sky-50 hover:text-sky-700'
             }`}
             onClick={() => onSelectFloor(floor.id)}
             aria-label={`Floor ${floor.label}`}

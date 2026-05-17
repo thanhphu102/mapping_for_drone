@@ -1102,7 +1102,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   }, [project?.name, projectStack])
 
   return (
-    <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-950 text-slate-100">
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-100 text-slate-950">
       <EditorStructurePanel
         project={project}
         floors={floors}
@@ -1120,7 +1120,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         isUpdatingFloor={isUpdatingFloor}
       />
 
-      <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-900">
+      <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-200">
         <div
           ref={containerRef}
           className="absolute inset-0 h-full w-full"
@@ -1169,7 +1169,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         {canShowFloorSelector ? (
           <button
             type="button"
-            className="absolute right-4 top-4 z-30 rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-1.5 text-xs font-semibold text-slate-100 shadow-lg"
+            className="absolute right-4 top-4 z-30 rounded-lg border border-slate-300 bg-white/95 px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
             onClick={() => setShowFloorSelector((value) => !value)}
           >
             Floors
@@ -1196,7 +1196,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           />
         ) : null}
         {breadcrumb && breadcrumb.length > 1 ? (
-          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-lg border border-white/30 bg-white/92 px-3 py-1.5 text-sm shadow-lg backdrop-blur">
+          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 px-3 py-1.5 text-sm shadow-lg backdrop-blur">
             <button
               type="button"
               className="text-sky-600 hover:text-sky-800 hover:underline"
@@ -1205,7 +1205,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               ← {projectStack[projectStack.length - 1]?.name}
             </button>
             <span className="text-slate-400">/</span>
-            <span className="font-medium text-slate-950">{project?.name}</span>
+            <span className="font-medium text-slate-900">{project?.name}</span>
           </div>
         ) : null}
       </main>
