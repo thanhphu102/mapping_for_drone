@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, Position } from 'geojson'
 import type { Map as MapLibreMap } from 'maplibre-gl'
+import { ArrowLeft } from 'lucide-react'
 import type { DrawingProject, ProjectCanvasConfig } from '../types/drone'
 import {
   fetchDrawingProject,
@@ -1264,6 +1265,15 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           className="absolute inset-0 h-full w-full"
           aria-label="Spatial editor map"
         />
+        <button
+          type="button"
+          className="absolute left-4 top-4 z-30 inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-sm font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900"
+          onClick={onBack}
+          aria-label="Back to main map"
+        >
+          <ArrowLeft className="size-4" aria-hidden="true" />
+          <span>Main map</span>
+        </button>
         <SpatialCanvasOverlay
           map={map}
           draftMode={mode}
