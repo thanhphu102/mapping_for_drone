@@ -70,7 +70,38 @@ function pointOnRing(map: Map, point: Position, ring: Position[]) {
   return false
 }
 
-function pointInBoundary(point: Position, project: DrawingProject, map: Map | null) {
+function pointInProjectedRing(point: { x: number; y: number }, ring: Array<{ x: number; y: number }>) {
+  let inside = false
+  let j = ring.length - 1
+  for (let i = 0; i < ring.length; i += 1) {
+    const intersects =
+      ring[i].y > point.y !== ring[j].y > point.y &&
+      point.x < ((ring[j].x - ring[i].x) * (point.y - ring[i].y)) / ((ring[j].y - ring[i].y) || 1e-12) + ring[i].x
+    if (intersects) inside = !inside
+    j = i
+  }
+  return inside
+}
+
+function pointToProjectedSegmentDistance(
+  point: { x: number; y: number },
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+) {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const lengthSquared = dx * dx + dy * dy
+  if (lengthSquared <= 1e-9) {
+    return Math.hypot(point.x - start.x, point.y - start.y)
+  }
+  const t = ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared
+  const clamped = Math.max(0, Math.min(1, t))
+  const nearestX = start.x + clamped * dx
+  const nearestY = start.y + clamped * dy
+  return Math.hypot(point.x - nearestX, point.y - nearestY)
+}
+
+export function pointInBoundary(point: Position, project: DrawingProject, map: Map | null) {
   if (!map) {
     return false
   }
@@ -84,8 +115,72 @@ function pointInBoundary(point: Position, project: DrawingProject, map: Map | nu
   })
 }
 
+function geometryPositions(geometry: Geometry): Position[] {
+  if (geometry.type === 'Point') {
+    return [geometry.coordinates as Position]
+  }
+  if (geometry.type === 'LineString') {
+    return geometry.coordinates as Position[]
+  }
+  if (geometry.type === 'Polygon') {
+    return geometry.coordinates.flat() as Position[]
+  }
+  if (geometry.type === 'MultiPoint') {
+    return geometry.coordinates as Position[]
+  }
+  if (geometry.type === 'MultiLineString') {
+    return geometry.coordinates.flat() as Position[]
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.flat(2) as Position[]
+  }
+  if (geometry.type === 'GeometryCollection') {
+    return geometry.geometries.flatMap((child) => geometryPositions(child))
+  }
+  return []
+}
+
+export function featureInsideBoundary(feature: Feature, project: DrawingProject, map: Map | null) {
+  const geometry = feature.geometry as Geometry | null
+  if (!geometry) {
+    return false
+  }
+  const positions = geometryPositions(geometry)
+  if (positions.length === 0) {
+    return false
+  }
+  return positions.every((position) => pointInBoundary(position, project, map))
+}
+
 function translatePosition([lng, lat]: Position, deltaLng: number, deltaLat: number): Position {
   return [lng + deltaLng, lat + deltaLat]
+}
+
+function geometryCentroid(geometry: Geometry): Position | null {
+  const positions = geometryPositions(geometry)
+  if (positions.length === 0) {
+    return null
+  }
+  const total = positions.reduce(
+    (sum, [lng, lat]) => {
+      sum.lng += lng
+      sum.lat += lat
+      return sum
+    },
+    { lng: 0, lat: 0 },
+  )
+  return [total.lng / positions.length, total.lat / positions.length]
+}
+
+function rotatePosition(position: Position, center: Position, angleRad: number): Position {
+  const dx = position[0] - center[0]
+  const dy = position[1] - center[1]
+  const cos = Math.cos(angleRad)
+  const sin = Math.sin(angleRad)
+  return [
+    center[0] + dx * cos - dy * sin,
+    center[1] + dx * sin + dy * cos,
+  ]
 }
 
 function translateGeometry(geometry: Geometry, deltaLng: number, deltaLat: number): Geometry {
@@ -146,6 +241,7 @@ interface UseDrawingEngineOptions {
   modeRef: React.RefObject<DrawMode>
   snapPreviewRef: React.RefObject<SnapPreview | null>
   selectedFeatureIdsRef: React.RefObject<string[]>
+  visibleFeaturesRef: React.RefObject<Feature[]>
   onAddPoint: (updater: (current: Position[]) => Position[]) => void
   onSaveDraft: () => void
   onMessage: (msg: string) => void
@@ -153,6 +249,7 @@ interface UseDrawingEngineOptions {
   onDeleteFeatures?: (featureIds: string[]) => void
   onMoveFeatures?: (featureIds: string[], deltaLng: number, deltaLat: number) => void
   onMoveEnd?: (featureIds: string[]) => void
+  onRotateFeatures?: (featureIds: string[], angleDeg: number) => void
   onQuickCreateTextBox?: (start: Position, end: Position) => void
   onCompleteBoxShape?: (mode: 'rectangle' | 'square' | 'triangle' | 'ellipse', start: Position, end: Position) => void
   onCompletePenPath?: (points: Position[]) => void
@@ -167,6 +264,7 @@ export function useDrawingEngine({
   modeRef,
   snapPreviewRef,
   selectedFeatureIdsRef,
+  visibleFeaturesRef,
   onAddPoint,
   onSaveDraft,
   onMessage,
@@ -174,6 +272,7 @@ export function useDrawingEngine({
   onDeleteFeatures,
   onMoveFeatures,
   onMoveEnd,
+  onRotateFeatures,
   onQuickCreateTextBox,
   onCompleteBoxShape,
   onCompletePenPath,
@@ -186,12 +285,14 @@ export function useDrawingEngine({
   const onDeleteFeaturesRef = useRef(onDeleteFeatures)
   const onMoveFeaturesRef = useRef(onMoveFeatures)
   const onMoveEndRef = useRef(onMoveEnd)
+  const onRotateFeaturesRef = useRef(onRotateFeatures)
   const onQuickCreateTextBoxRef = useRef(onQuickCreateTextBox)
   const onCompleteBoxShapeRef = useRef(onCompleteBoxShape)
   const onCompletePenPathRef = useRef(onCompletePenPath)
   const onCompleteLassoRef = useRef(onCompleteLasso)
   const boxStartRef = useRef<{ x: number; y: number } | null>(null)
   const movingFeaturesRef = useRef<{ featureIds: string[]; lastLng: number; lastLat: number; moved: boolean } | null>(null)
+  const rotatingFeaturesRef = useRef<{ featureIds: string[]; centerX: number; centerY: number; lastAngle: number; rotated: boolean } | null>(null)
   const boxShapeStartRef = useRef<Position | null>(null)
   const freehandStartedRef = useRef(false)
   const freehandPointsRef = useRef<Position[]>([])
@@ -227,6 +328,10 @@ export function useDrawingEngine({
   }, [onMoveEnd])
 
   useEffect(() => {
+    onRotateFeaturesRef.current = onRotateFeatures
+  }, [onRotateFeatures])
+
+  useEffect(() => {
     onQuickCreateTextBoxRef.current = onQuickCreateTextBox
   }, [onQuickCreateTextBox])
 
@@ -243,6 +348,65 @@ export function useDrawingEngine({
   }, [onCompleteLasso])
 
   const suppressClickRef = useRef(false)
+  const getSelectedFeatureById = useCallback((featureId: string) => {
+    return visibleFeaturesRef.current.find((feature) => String(feature.id ?? feature.properties?.id ?? '') === featureId) ?? null
+  }, [visibleFeaturesRef])
+
+  const hitTestFeatureAtPoint = useCallback((point: { x: number; y: number }) => {
+    if (!map) return null
+    for (let index = visibleFeaturesRef.current.length - 1; index >= 0; index -= 1) {
+      const feature = visibleFeaturesRef.current[index]
+      const geometry = feature.geometry
+      if (!geometry) continue
+      if (geometry.type === 'Point') {
+        const projected = map.project([geometry.coordinates[0], geometry.coordinates[1]])
+        if (Math.hypot(point.x - projected.x, point.y - projected.y) <= 12) {
+          return feature
+        }
+        continue
+      }
+      if (geometry.type === 'LineString') {
+        const projected = geometry.coordinates.map((position) => map.project([position[0], position[1]]))
+        let hit = false
+        for (let lineIndex = 1; lineIndex < projected.length; lineIndex += 1) {
+          if (pointToProjectedSegmentDistance(point, projected[lineIndex - 1], projected[lineIndex]) <= 12) {
+            hit = true
+            break
+          }
+        }
+        if (hit) return feature
+        continue
+      }
+      if (geometry.type === 'Polygon') {
+        const rings = geometry.coordinates.map((ring) => ring.map((position) => map.project([position[0], position[1]])))
+        const [outer, ...holes] = rings
+        if (pointInProjectedRing(point, outer) && !holes.some((hole) => pointInProjectedRing(point, hole))) {
+          return feature
+        }
+      }
+    }
+    return null
+  }, [map, visibleFeaturesRef])
+
+  const getRotateHandle = useCallback((feature: Feature) => {
+    if (!map) return null
+    const center = geometryCentroid(feature.geometry)
+    const positions = geometryPositions(feature.geometry)
+    if (!center || positions.length === 0) return null
+    const projectedCenter = map.project([center[0], center[1]])
+    const radius = positions.reduce((maxRadius, position) => {
+      const point = map.project([position[0], position[1]])
+      return Math.max(maxRadius, Math.hypot(point.x - projectedCenter.x, point.y - projectedCenter.y))
+    }, 0)
+    const handleOffset = Math.max(28, radius * 0.18)
+    return {
+      x: projectedCenter.x,
+      y: projectedCenter.y + radius + handleOffset,
+      centerX: projectedCenter.x,
+      centerY: projectedCenter.y,
+    }
+  }, [map])
+
   const constrainSquareByPixels = useCallback((start: Position, rawEnd: Position): Position => {
     if (!map) return rawEnd
     const startPx = map.project([start[0], start[1]])
@@ -267,8 +431,7 @@ export function useDrawingEngine({
       }
 
       const currentMode = modeRef.current
-      const featureHits = map.queryRenderedFeatures(event.point, { layers: featureLayers })
-      const firstFeature = featureHits.find((f) => f.id || f.properties?.id)
+      const firstFeature = hitTestFeatureAtPoint(event.point)
       const firstId = firstFeature?.id ?? firstFeature?.properties?.id
 
       if (currentMode === 'move') {
@@ -309,7 +472,7 @@ export function useDrawingEngine({
         return [...current, point]
       })
     },
-    [isMounted, modeRef, onAddPoint, onMessage, snapPreviewRef, map, selectedFeatureIdsRef],
+    [hitTestFeatureAtPoint, isMounted, modeRef, onAddPoint, onMessage, snapPreviewRef, map, selectedFeatureIdsRef],
   )
 
   useEffect(() => {
@@ -361,7 +524,7 @@ export function useDrawingEngine({
       }
 
       if (mode === 'move') {
-        setCursor('grab')
+        setCursor('grabbing')
         return
       }
 
@@ -372,8 +535,26 @@ export function useDrawingEngine({
       }
 
       if (mode === 'select') {
-        const featureHits = map.queryRenderedFeatures(e.point, { layers: featureLayers })
-        const firstFeature = featureHits.find((feature) => feature.id || feature.properties?.id)
+        const currentSelection = selectedFeatureIdsRef.current ?? []
+        if (currentSelection.length === 1) {
+          const selectedFeature = getSelectedFeatureById(currentSelection[0])
+          const handle = selectedFeature ? getRotateHandle(selectedFeature) : null
+          if (handle) {
+            const distance = Math.hypot(e.point.x - handle.x, e.point.y - handle.y)
+            if (distance <= 18) {
+              rotatingFeaturesRef.current = {
+                featureIds: [currentSelection[0]],
+                centerX: handle.centerX,
+                centerY: handle.centerY,
+                lastAngle: Math.atan2(e.point.y - handle.centerY, e.point.x - handle.centerX),
+                rotated: false,
+              }
+              setCursor('grabbing')
+              return
+            }
+          }
+        }
+        const firstFeature = hitTestFeatureAtPoint(e.point)
         const firstId = String(firstFeature?.id ?? firstFeature?.properties?.id ?? '')
         if (firstId) {
           const currentSelection = selectedFeatureIdsRef.current ?? []
@@ -394,6 +575,20 @@ export function useDrawingEngine({
     }
 
     const handleMouseMove = (e: MapMouseEvent) => {
+      if (rotatingFeaturesRef.current && onRotateFeaturesRef.current) {
+        const nextAngle = Math.atan2(
+          e.point.y - rotatingFeaturesRef.current.centerY,
+          e.point.x - rotatingFeaturesRef.current.centerX,
+        )
+        const deltaDeg = ((nextAngle - rotatingFeaturesRef.current.lastAngle) * 180) / Math.PI
+        if (Math.abs(deltaDeg) >= 0.5) {
+          onRotateFeaturesRef.current(rotatingFeaturesRef.current.featureIds, -deltaDeg)
+          rotatingFeaturesRef.current.lastAngle = nextAngle
+          rotatingFeaturesRef.current.rotated = true
+        }
+        return
+      }
+
       if (boxShapeStartRef.current && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
         const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
         const mode = modeRef.current
@@ -444,16 +639,31 @@ export function useDrawingEngine({
     }
 
     const handleMouseUp = (e: MapMouseEvent) => {
+      if (rotatingFeaturesRef.current) {
+        const didRotate = rotatingFeaturesRef.current.rotated
+        rotatingFeaturesRef.current = null
+        setCursor('default')
+        if (didRotate) {
+          suppressClickRef.current = true
+        }
+      }
+
       if (movingFeaturesRef.current) {
         const movedFeatureIds = movingFeaturesRef.current.featureIds
         const didMove = movingFeaturesRef.current.moved
         movingFeaturesRef.current = null
         setCursor('')
-        map.dragPan.disable()
+        if (modeRef.current !== 'move') {
+          map.dragPan.disable()
+        }
         if (didMove) {
           suppressClickRef.current = true
           onMoveEndRef.current?.(movedFeatureIds)
         }
+      }
+
+      if (modeRef.current === 'move') {
+        setCursor('grab')
       }
 
       if (boxShapeStartRef.current && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
@@ -530,8 +740,7 @@ export function useDrawingEngine({
     }
 
     const handleContextMenu = (e: MapMouseEvent) => {
-      const hits = map.queryRenderedFeatures(e.point, { layers: featureLayers })
-      const first = hits.find((f) => f.id || f.properties?.id)
+      const first = hitTestFeatureAtPoint(e.point)
       const firstId = first?.id ?? first?.properties?.id
       if (firstId && onDeleteFeaturesRef.current) {
         e.preventDefault()
@@ -566,7 +775,7 @@ export function useDrawingEngine({
       map.off('dblclick', handleDblClick)
       map.doubleClickZoom.enable()
     }
-  }, [map, handleMapClick, onAddPoint, modeRef, selectedFeatureIdsRef, constrainSquareByPixels])
+  }, [map, handleMapClick, hitTestFeatureAtPoint, onAddPoint, modeRef, selectedFeatureIdsRef, constrainSquareByPixels, getRotateHandle, getSelectedFeatureById])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -917,5 +1126,66 @@ export function translateFeatureGeometry(feature: Feature, deltaLng: number, del
   return {
     ...feature,
     geometry: translateGeometry(feature.geometry, deltaLng, deltaLat),
+  }
+}
+
+function rotateGeometry(geometry: Geometry, angleRad: number, center: Position): Geometry {
+  if (geometry.type === 'Point') {
+    return { ...geometry, coordinates: rotatePosition(geometry.coordinates as Position, center, angleRad) }
+  }
+  if (geometry.type === 'LineString') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((position) => rotatePosition(position, center, angleRad)),
+    }
+  }
+  if (geometry.type === 'MultiLineString') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((line) =>
+        line.map((position) => rotatePosition(position, center, angleRad)),
+      ),
+    }
+  }
+  if (geometry.type === 'Polygon') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((ring) =>
+        ring.map((position) => rotatePosition(position, center, angleRad)),
+      ),
+    }
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((polygon) =>
+        polygon.map((ring) => ring.map((position) => rotatePosition(position, center, angleRad))),
+      ),
+    }
+  }
+  if (geometry.type === 'MultiPoint') {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map((position) => rotatePosition(position, center, angleRad)),
+    }
+  }
+  if (geometry.type === 'GeometryCollection') {
+    return {
+      ...geometry,
+      geometries: geometry.geometries.map((child) => rotateGeometry(child, angleRad, center)),
+    }
+  }
+  return geometry
+}
+
+export function rotateFeatureGeometry(feature: Feature, angleDeg: number): Feature {
+  const center = geometryCentroid(feature.geometry)
+  if (!center) {
+    return feature
+  }
+  const angleRad = (angleDeg * Math.PI) / 180
+  return {
+    ...feature,
+    geometry: rotateGeometry(feature.geometry, angleRad, center),
   }
 }

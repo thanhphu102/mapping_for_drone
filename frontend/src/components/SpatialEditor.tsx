@@ -28,6 +28,8 @@ import {
   type DrawMode,
   featureTypeForMode,
   draftToFeatures,
+  featureInsideBoundary,
+  rotateFeatureGeometry,
   translateFeatureGeometry,
 } from '../hooks/useDrawingEngine'
 
@@ -309,7 +311,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   const handleZoomOut = useCallback(() => {
     if (!map) return
-    map.zoomOut({ duration: 120 })
+    const nextZoom = Math.max(10, map.getZoom() - 1)
+    map.easeTo({ zoom: nextZoom, duration: 120 })
   }, [map])
 
   const isMounted = useCallback(() => isMountedRef.current, [])
@@ -351,6 +354,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     points: Position[],
     targetFeatureType: string,
   ) => {
+    if (!project) return null
     const collection = draftToFeatures(targetMode, points, targetFeatureType, null, map)
     const finalFeature = collection?.features.find(
       (feature) =>
@@ -358,8 +362,11 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         (feature.geometry.type === 'Polygon' || feature.geometry.type === 'LineString' || feature.geometry.type === 'Point'),
     )
     if (!finalFeature) return null
+    if (!featureInsideBoundary(finalFeature as Feature, project, map)) {
+      return null
+    }
     return buildFeatureForStorage(finalFeature as Feature, targetFeatureType)
-  }, [buildFeatureForStorage, map])
+  }, [buildFeatureForStorage, map, project])
 
   const stageCreatedFeature = useCallback((feature: Feature, options?: { select?: boolean }) => {
     const nextFeature: Feature = {
@@ -563,13 +570,39 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   const handleMoveFeatures = useCallback((featureIds: string[], deltaLng: number, deltaLat: number) => {
     if (featureIds.length === 0) return
+    if (!project || !map) return
+    const selectedSet = new Set(featureIds)
+    const nextFeatures = visibleFeatures.filter((feature) => selectedSet.has(featureIdForState(feature)))
+    const canMove = nextFeatures.every((feature) =>
+      featureInsideBoundary(translateFeatureGeometry(feature, deltaLng, deltaLat), project, map),
+    )
+    if (!canMove) {
+      setMessage('Move rejected: feature must stay inside the project base boundary')
+      return
+    }
     applyLocalFeatureUpdate(featureIds, (feature) => translateFeatureGeometry(feature, deltaLng, deltaLat))
-  }, [applyLocalFeatureUpdate])
+  }, [applyLocalFeatureUpdate, featureIdForState, map, project, visibleFeatures])
 
   const handlePersistMovedFeatures = useCallback(async (featureIds: string[]) => {
     if (featureIds.length === 0) return
     setMessage('Move staged in draft')
   }, [])
+
+  const handleRotateSelected = useCallback((angleDeg: number) => {
+    if (!project || !map || selectedFeatures.length === 0) return
+    const invalidRotation = selectedFeatures.some((feature) =>
+      !featureInsideBoundary(rotateFeatureGeometry(feature, angleDeg), project, map),
+    )
+    if (invalidRotation) {
+      setMessage('Rotation rejected: feature must stay inside the project base boundary')
+      return
+    }
+    applyLocalFeatureUpdate(
+      selectedFeatures.map((feature) => featureIdForState(feature)),
+      (feature) => rotateFeatureGeometry(feature, angleDeg),
+    )
+    setMessage(`Rotation staged (${angleDeg > 0 ? '+' : ''}${angleDeg}deg)`)
+  }, [applyLocalFeatureUpdate, featureIdForState, map, project, selectedFeatures])
 
   const selectedBuildingFeature = useMemo(() => {
     if (!project || selectedFeatures.length !== 1) return null
@@ -650,7 +683,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     const p3: Position = [end[0], end[1]]
     const p4: Position = [start[0], end[1]]
     try {
-      stageCreatedFeature({
+      const nextTextFeature = {
         type: 'Feature',
         id: makeDraftFeatureId(),
         geometry: { type: 'Polygon', coordinates: [[p1, p2, p3, p4, p1]] },
@@ -670,7 +703,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           minZoom: project.boundaryMinZoom,
           maxZoom: 24,
         },
-      } as Feature, { select: false })
+      } as Feature
+      if (!featureInsideBoundary(nextTextFeature, project, map)) {
+        setMessage('Text box rejected: it must stay inside the project base boundary')
+        return
+      }
+      stageCreatedFeature(nextTextFeature, { select: false })
       setMessage('Text staged in draft')
     } catch (error) {
       if (isMountedRef.current) {
@@ -749,7 +787,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       return
     }
     if (!currentSavableDraftFeature) {
-      setMessage('No draft shape to finalize')
+      setMessage('Draft shape is invalid or extends outside the project base boundary')
       return
     }
     stageCreatedFeature(currentSavableDraftFeature, { select: false })
@@ -765,6 +803,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     modeRef,
     snapPreviewRef,
     selectedFeatureIdsRef,
+    visibleFeaturesRef,
     onAddPoint: setDraftPoints,
     onSaveDraft: handleFinalizeCurrentDraft,
     onMessage: handleMessage,
@@ -772,16 +811,37 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onDeleteFeatures: handleDeleteFeatures,
     onMoveFeatures: handleMoveFeatures,
     onMoveEnd: handlePersistMovedFeatures,
+    onRotateFeatures: (featureIds, angleDeg) => {
+      if (!project || !map || featureIds.length === 0) return
+      const featureSet = new Set(featureIds)
+      const nextFeatures = visibleFeatures.filter((feature) => featureSet.has(featureIdForState(feature)))
+      const invalidRotation = nextFeatures.some((feature) =>
+        !featureInsideBoundary(rotateFeatureGeometry(feature, angleDeg), project, map),
+      )
+      if (invalidRotation) {
+        setMessage('Rotation rejected: feature must stay inside the project base boundary')
+        return
+      }
+      applyLocalFeatureUpdate(featureIds, (feature) => rotateFeatureGeometry(feature, angleDeg))
+    },
     onQuickCreateTextBox: handleQuickCreateTextBox,
     onCompleteBoxShape: (shapeMode, start, end) => {
       const nextFeature = buildFinalFeatureFromPoints(shapeMode, [start, end], featureTypeForMode(shapeMode))
-      if (!nextFeature) return
+      if (!nextFeature) {
+        setDraftPoints([])
+        setMessage('Shape rejected: it must stay inside the project base boundary')
+        return
+      }
       stageCreatedFeature(nextFeature, { select: false })
       setMessage('Shape added to draft')
     },
     onCompletePenPath: (points) => {
       const nextFeature = buildFinalFeatureFromPoints('pen', points, featureTypeForMode('pen'))
-      if (!nextFeature) return
+      if (!nextFeature) {
+        setDraftPoints([])
+        setMessage('Stroke rejected: it must stay inside the project base boundary')
+        return
+      }
       stageCreatedFeature(nextFeature, { select: false })
       setMessage('Stroke added to draft')
     },
@@ -921,13 +981,19 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       } else if (key === '-' || key === '_') {
         event.preventDefault()
         handleZoomOut()
+      } else if (key === 'q' && selectedFeatureIdsRef.current.length > 0) {
+        event.preventDefault()
+        handleRotateSelected(-15)
+      } else if (key === 'e' && selectedFeatureIdsRef.current.length > 0) {
+        event.preventDefault()
+        handleRotateSelected(15)
       }
     }
     window.addEventListener('keydown', handleModeShortcuts)
     return () => {
       window.removeEventListener('keydown', handleModeShortcuts)
     }
-  }, [handleSetMode, handleZoomIn, handleZoomOut])
+  }, [handleRotateSelected, handleSetMode, handleZoomIn, handleZoomOut])
 
   // --- Visible feature loading ---
   useEffect(() => {
@@ -1290,9 +1356,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         ) : null}
       </main>
 
-      <EditorSidebar
-        project={project}
-        projectConfig={projectConfig}
+        <EditorSidebar
+          project={project}
+          projectConfig={projectConfig}
         floors={floors}
         selectedFloorId={selectedFloorId}
         mapZoom={mapZoom}
@@ -1304,11 +1370,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         snapPreview={snapPreview}
         message={message}
         selectedFeatures={selectedFeatures}
-        inspectorDraft={inspectorDraft}
-        onInspectorDraftChange={setInspectorDraft}
-        onSaveInspector={handleSaveInspector}
-        isSavingInspector={isSavingInspector}
-      />
+          inspectorDraft={inspectorDraft}
+          onInspectorDraftChange={setInspectorDraft}
+          onSaveInspector={handleSaveInspector}
+          onActivateMove={() => handleSetMode('move')}
+          onRotateSelected={handleRotateSelected}
+          isSavingInspector={isSavingInspector}
+        />
     </div>
   )
 }

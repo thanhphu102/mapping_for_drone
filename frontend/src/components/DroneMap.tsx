@@ -255,7 +255,7 @@ function projectsToFeatureCollection(
   return {
     type: 'FeatureCollection',
     features: projects.flatMap((project) =>
-      (project.publishedFeatures ?? project.features)
+      (project.publishedFeatures ?? [])
         .filter((feature) => {
           if (!selectedProjectId || project.id !== selectedProjectId) return true
           if (!selectedFloorId) return true

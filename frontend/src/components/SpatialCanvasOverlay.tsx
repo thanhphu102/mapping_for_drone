@@ -89,6 +89,46 @@ function projectedBounds(map: Map, ring: Position[]) {
   )
 }
 
+function geometryProjectedRotateAnchor(map: Map, geometry: Geometry | null) {
+  if (!geometry) return null
+  const positions: Position[] =
+    geometry.type === 'Point'
+      ? [geometry.coordinates as Position]
+      : geometry.type === 'LineString'
+        ? (geometry.coordinates as Position[])
+        : geometry.type === 'Polygon'
+          ? (geometry.coordinates.flat() as Position[])
+          : geometry.type === 'MultiPoint'
+            ? (geometry.coordinates as Position[])
+            : geometry.type === 'MultiLineString'
+              ? (geometry.coordinates.flat() as Position[])
+              : geometry.type === 'MultiPolygon'
+                ? (geometry.coordinates.flat(2) as Position[])
+                : []
+  if (positions.length === 0) return null
+  const total = positions.reduce(
+    (sum, [lng, lat]) => {
+      sum.lng += lng
+      sum.lat += lat
+      return sum
+    },
+    { lng: 0, lat: 0 },
+  )
+  const center = projectPoint(map, [total.lng / positions.length, total.lat / positions.length])
+  const radius = positions.reduce((maxRadius, position) => {
+    const point = projectPoint(map, position)
+    return Math.max(maxRadius, Math.hypot(point.x - center.x, point.y - center.y))
+  }, 0)
+  const handleOffset = Math.max(28, radius * 0.18)
+  return {
+    centerX: center.x,
+    centerY: center.y,
+    radius,
+    handleX: center.x,
+    handleY: center.y + radius + handleOffset,
+  }
+}
+
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
   const words = text.split(/\s+/).filter(Boolean)
   const lines: string[] = []
@@ -129,8 +169,11 @@ function drawTextBox(
   ctx.fillRect(bounds.minX, bounds.minY, width, height)
   ctx.strokeRect(bounds.minX, bounds.minY, width, height)
   if (selected) {
-    ctx.strokeStyle = '#f97316'
-    ctx.lineWidth = style.lineWidth + 2
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = style.lineWidth + 3
+    ctx.strokeRect(bounds.minX, bounds.minY, width, height)
+    ctx.strokeStyle = '#16a34a'
+    ctx.lineWidth = style.lineWidth + 1
     ctx.strokeRect(bounds.minX, bounds.minY, width, height)
   }
 
@@ -179,14 +222,19 @@ function drawFeature(
     ctx.stroke()
     if (selected) {
       drawPolygonPath(ctx, map, geometry.coordinates as Position[][])
-      ctx.strokeStyle = '#f97316'
-      ctx.lineWidth = lineWidth + 2
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = lineWidth + 3
+      ctx.stroke()
+      drawPolygonPath(ctx, map, geometry.coordinates as Position[][])
+      ctx.strokeStyle = '#16a34a'
+      ctx.lineWidth = lineWidth + 1
       ctx.stroke()
     }
   } else if (geometry.type === 'MultiPolygon') {
     drawMultiPolygon(ctx, map, geometry as MultiPolygon, fill, baseStroke, lineWidth)
     if (selected) {
-      drawMultiPolygon(ctx, map, geometry as MultiPolygon, 'rgba(0,0,0,0)', '#f97316', lineWidth + 2)
+      drawMultiPolygon(ctx, map, geometry as MultiPolygon, 'rgba(0,0,0,0)', '#ffffff', lineWidth + 3)
+      drawMultiPolygon(ctx, map, geometry as MultiPolygon, 'rgba(0,0,0,0)', '#16a34a', lineWidth + 1)
     }
   } else if (geometry.type === 'LineString') {
     ctx.beginPath()
@@ -205,8 +253,17 @@ function drawFeature(
         if (index === 0) ctx.moveTo(point.x, point.y)
         else ctx.lineTo(point.x, point.y)
       })
-      ctx.strokeStyle = '#f97316'
-      ctx.lineWidth = lineWidth + 2
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = lineWidth + 3
+      ctx.stroke()
+      ctx.beginPath()
+      ;(geometry.coordinates as Position[]).forEach((position, index) => {
+        const point = projectPoint(map, position)
+        if (index === 0) ctx.moveTo(point.x, point.y)
+        else ctx.lineTo(point.x, point.y)
+      })
+      ctx.strokeStyle = '#16a34a'
+      ctx.lineWidth = lineWidth + 1
       ctx.stroke()
     }
   } else if (geometry.type === 'Point') {
@@ -214,12 +271,12 @@ function drawFeature(
     ctx.beginPath()
     ctx.arc(point.x, point.y, selected ? 8 : 5, 0, Math.PI * 2)
     if (selected) {
-      ctx.fillStyle = '#f97316'
+      ctx.fillStyle = '#ffffff'
       ctx.fill()
       ctx.beginPath()
-      ctx.arc(point.x, point.y, 5, 0, Math.PI * 2)
+      ctx.arc(point.x, point.y, 6, 0, Math.PI * 2)
     }
-    ctx.fillStyle = baseStroke
+    ctx.fillStyle = selected ? '#16a34a' : baseStroke
     ctx.strokeStyle = '#ffffff'
     ctx.lineWidth = 2
     ctx.fill()
@@ -305,6 +362,35 @@ export function SpatialCanvasOverlay({
               : 'saved-draft',
         )
       })
+
+      if (selectedFeatureIds.length === 1) {
+        const selectedFeature = visibleFeatures.find((feature) => featureId(feature) === selectedFeatureIds[0])
+        const anchor = selectedFeature
+          ? geometryProjectedRotateAnchor(map, selectedFeature.geometry as Geometry | null)
+          : null
+        if (anchor) {
+          const { centerX, centerY, radius, handleY } = anchor
+          ctx.beginPath()
+          ctx.setLineDash([4, 4])
+          ctx.strokeStyle = 'rgba(15,23,42,0.9)'
+          ctx.lineWidth = 1.5
+          ctx.moveTo(centerX, centerY + Math.max(8, radius + 4))
+          ctx.lineTo(centerX, handleY - 10)
+          ctx.stroke()
+          ctx.setLineDash([])
+          ctx.beginPath()
+          ctx.arc(centerX, handleY, 9, 0, Math.PI * 2)
+          ctx.fillStyle = '#0f172a'
+          ctx.fill()
+          ctx.strokeStyle = '#ffffff'
+          ctx.lineWidth = 2.5
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.arc(centerX, centerY, 3, 0, Math.PI * 2)
+          ctx.fillStyle = '#f97316'
+          ctx.fill()
+        }
+      }
 
       draftCollection?.features.forEach((feature) => {
         drawFeature(ctx, map, feature as Feature, false, lassoDraft, 'in-progress')

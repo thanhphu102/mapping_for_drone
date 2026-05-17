@@ -48,6 +48,9 @@ const editorStyle: maplibregl.StyleSpecification = {
   ],
 }
 
+const spatialEditorMinZoom = 10
+const spatialEditorMaxZoom = 24
+
 interface MapContextValue {
   map: Map | null
   mapReady: boolean
@@ -96,6 +99,8 @@ export function MapProvider({ children }: MapProviderProps) {
         style: editorStyle,
         center: [106.70098, 10.77689],
         zoom: 14,
+        minZoom: spatialEditorMinZoom,
+        maxZoom: spatialEditorMaxZoom,
         fadeDuration: 0,
         preserveDrawingBuffer: false,
         dragPan: false,

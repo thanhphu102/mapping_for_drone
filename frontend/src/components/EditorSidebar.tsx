@@ -1,4 +1,4 @@
-import { Info, Save } from 'lucide-react'
+import { Hand, Info, RotateCcw, RotateCw, Save } from 'lucide-react'
 import type { Feature, Position } from 'geojson'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFloor } from '../types/drone'
 import type { SnapPreview } from '../hooks/useSnapEngine'
@@ -27,6 +27,8 @@ interface EditorSidebarProps {
   inspectorDraft: InspectorDraft
   onInspectorDraftChange: (next: InspectorDraft) => void
   onSaveInspector: () => void
+  onActivateMove: () => void
+  onRotateSelected: (angleDeg: number) => void
   isSavingInspector: boolean
 }
 
@@ -47,6 +49,8 @@ export function EditorSidebar({
   inspectorDraft,
   onInspectorDraftChange,
   onSaveInspector,
+  onActivateMove,
+  onRotateSelected,
   isSavingInspector,
 }: EditorSidebarProps) {
   const localOrigin: Position | null = project ? [project.bbox[0], project.bbox[1]] : null
@@ -107,6 +111,35 @@ export function EditorSidebar({
             >
               <Save className="size-3.5" /> Save metadata
             </button>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                type="button"
+                onClick={onActivateMove}
+                disabled={selectedFeatures.length === 0}
+                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 disabled:opacity-50"
+                title="Pan map"
+              >
+                <Hand className="size-3.5" /> Pan map
+              </button>
+              <button
+                type="button"
+                onClick={() => onRotateSelected(-15)}
+                disabled={selectedFeatures.length === 0}
+                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 disabled:opacity-50"
+                title="Rotate left"
+              >
+                <RotateCcw className="size-3.5" /> Rotate
+              </button>
+              <button
+                type="button"
+                onClick={() => onRotateSelected(15)}
+                disabled={selectedFeatures.length === 0}
+                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 disabled:opacity-50"
+                title="Rotate right"
+              >
+                <RotateCw className="size-3.5" /> Rotate
+              </button>
+            </div>
           </div>
         </section>
 

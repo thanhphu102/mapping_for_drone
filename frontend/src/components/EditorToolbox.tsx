@@ -22,7 +22,7 @@ interface ToolConfig {
 
 const PRIMARY_TOOLS: ToolConfig[] = [
   { mode: 'select', label: 'Select', shortcut: 'V', icon: MousePointer2, group: 'cursor' },
-  { mode: 'move', label: 'Hand', shortcut: 'M', icon: Hand, group: 'cursor' },
+  { mode: 'move', label: 'Pan', shortcut: 'M', icon: Hand, group: 'cursor' },
   { mode: 'text', label: 'Text', shortcut: 'T', icon: Type, group: 'draw' },
   { mode: 'pen', label: 'Pen', shortcut: 'N', icon: PenTool, group: 'draw' },
   { mode: 'line', label: 'Line', shortcut: 'L', icon: Route, group: 'draw' },

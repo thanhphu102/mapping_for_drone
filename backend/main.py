@@ -1353,6 +1353,7 @@ async def list_drawing_projects(
     for project in projects:
         if not isinstance(project, dict):
             continue
+        ensure_project_feature_snapshots(project)
         if parentProjectId is not None and str(project.get("parentProjectId") or "") != parentProjectId:
             continue
         if osmType is not None and str(project.get("osmType") or "") != osmType:
