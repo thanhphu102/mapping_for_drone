@@ -1,4 +1,5 @@
-import { Hand, Info, RotateCcw, RotateCw, Save } from 'lucide-react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { Info, Save } from 'lucide-react'
 import type { Feature, Position } from 'geojson'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFloor } from '../types/drone'
 import type { SnapPreview } from '../hooks/useSnapEngine'
@@ -27,8 +28,6 @@ interface EditorSidebarProps {
   inspectorDraft: InspectorDraft
   onInspectorDraftChange: (next: InspectorDraft) => void
   onSaveInspector: () => void
-  onActivateMove: () => void
-  onRotateSelected: (angleDeg: number) => void
   isSavingInspector: boolean
 }
 
@@ -49,14 +48,15 @@ export function EditorSidebar({
   inspectorDraft,
   onInspectorDraftChange,
   onSaveInspector,
-  onActivateMove,
-  onRotateSelected,
   isSavingInspector,
 }: EditorSidebarProps) {
   const localOrigin: Position | null = project ? [project.bbox[0], project.bbox[1]] : null
   const hoverLocal = hoverCoordinate && localOrigin ? localCoordinates(hoverCoordinate, localOrigin) : null
   const activeFloor = floors.find((floor) => floor.id === selectedFloorId)
   const isMultiSelect = selectedFeatures.length > 1
+  const stopEditorShortcutPropagation = (event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    event.stopPropagation()
+  }
 
   return (
     <aside className="flex h-full w-[340px] max-w-[36vw] flex-col border-l border-slate-200 bg-white text-slate-900">
@@ -81,6 +81,7 @@ export function EditorSidebar({
                 className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
                 value={inspectorDraft.name}
                 onChange={(event) => onInspectorDraftChange({ ...inspectorDraft, name: event.target.value })}
+                onKeyDown={stopEditorShortcutPropagation}
                 disabled={selectedFeatures.length === 0 || isMultiSelect}
               />
             </label>
@@ -90,6 +91,7 @@ export function EditorSidebar({
                 className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
                 value={inspectorDraft.tag}
                 onChange={(event) => onInspectorDraftChange({ ...inspectorDraft, tag: event.target.value })}
+                onKeyDown={stopEditorShortcutPropagation}
                 disabled={selectedFeatures.length === 0}
               />
             </label>
@@ -100,6 +102,7 @@ export function EditorSidebar({
                 className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
                 value={inspectorDraft.noteText}
                 onChange={(event) => onInspectorDraftChange({ ...inspectorDraft, noteText: event.target.value })}
+                onKeyDown={stopEditorShortcutPropagation}
                 disabled={selectedFeatures.length === 0}
               />
             </label>
@@ -111,35 +114,6 @@ export function EditorSidebar({
             >
               <Save className="size-3.5" /> Save metadata
             </button>
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button
-                type="button"
-                onClick={onActivateMove}
-                disabled={selectedFeatures.length === 0}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 disabled:opacity-50"
-                title="Pan map"
-              >
-                <Hand className="size-3.5" /> Pan map
-              </button>
-              <button
-                type="button"
-                onClick={() => onRotateSelected(-15)}
-                disabled={selectedFeatures.length === 0}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 disabled:opacity-50"
-                title="Rotate left"
-              >
-                <RotateCcw className="size-3.5" /> Rotate
-              </button>
-              <button
-                type="button"
-                onClick={() => onRotateSelected(15)}
-                disabled={selectedFeatures.length === 0}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 disabled:opacity-50"
-                title="Rotate right"
-              >
-                <RotateCw className="size-3.5" /> Rotate
-              </button>
-            </div>
           </div>
         </section>
 

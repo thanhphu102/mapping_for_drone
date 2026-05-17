@@ -35,6 +35,17 @@ import {
   translateFeatureGeometry,
 } from '../hooks/useDrawingEngine'
 
+function isEditableEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  const tagName = target.tagName
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return true
+  }
+  return Boolean(target.closest('[contenteditable="true"]'))
+}
+
 const DEFAULT_PROJECT_CONFIG: ProjectCanvasConfig = {
   canvasMode: 'normal',
   defaultZoom: 14,
@@ -133,6 +144,9 @@ function InlineTextBoxEditor({
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         event.stopPropagation()
+        if (event.nativeEvent.isComposing || event.key === 'Process') {
+          return
+        }
         if (event.key === 'Escape') {
           event.preventDefault()
           cancelRef.current = true
@@ -958,7 +972,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   useEffect(() => {
     const handleModeShortcuts = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
-      if ((event.target as HTMLElement | null)?.tagName === 'INPUT' || (event.target as HTMLElement | null)?.tagName === 'TEXTAREA') {
+      if (event.isComposing || event.key === 'Process' || isEditableEventTarget(event.target)) {
         return
       }
       if (key === 'v') {
@@ -1398,8 +1412,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           inspectorDraft={inspectorDraft}
           onInspectorDraftChange={setInspectorDraft}
           onSaveInspector={handleSaveInspector}
-          onActivateMove={() => handleSetMode('move')}
-          onRotateSelected={handleRotateSelected}
           isSavingInspector={isSavingInspector}
         />
     </div>

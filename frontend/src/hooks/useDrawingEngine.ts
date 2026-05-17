@@ -6,6 +6,17 @@ import type { SnapPreview } from './useSnapEngine'
 
 const featureLayers = ['project-features-fill', 'project-features-line', 'project-features-point']
 
+function isEditableEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  const tagName = target.tagName
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return true
+  }
+  return Boolean(target.closest('[contenteditable="true"]'))
+}
+
 export type DrawMode =
   | 'select'
   | 'move'
@@ -959,6 +970,7 @@ export function useDrawingEngine({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!toolsEnabledRef.current) return
+      if (e.isComposing || e.key === 'Process' || isEditableEventTarget(e.target)) return
 
       if (e.key === 'Enter' && !['select', 'move', 'text'].includes(modeRef.current)) {
         e.preventDefault()
