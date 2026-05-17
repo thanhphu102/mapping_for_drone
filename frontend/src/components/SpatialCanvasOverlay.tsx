@@ -5,9 +5,10 @@ import type { SnapPreview } from '../hooks/useSnapEngine'
 
 interface SpatialCanvasOverlayProps {
   map: Map | null
-  projectStatus?: 'draft' | 'published' | 'archived'
   draftMode?: string | null
   visibleFeatures: Feature[]
+  publishedFeatures?: Feature[]
+  localDraftFeatureIds?: string[]
   selectedFeatureIds: string[]
   draftCollection: FeatureCollection | null
   snapPreview: SnapPreview | null
@@ -19,6 +20,20 @@ function featureId(feature: Feature) {
 
 function isTextFeature(feature: Feature) {
   return feature.properties?.featureType === 'text_label'
+}
+
+type RenderVariant = 'published' | 'saved-draft' | 'in-progress'
+
+function variantStyle(variant: RenderVariant, lassoDraft: boolean) {
+  if (variant === 'in-progress') {
+    return lassoDraft
+      ? { fill: 'rgba(37,99,235,0.14)', stroke: '#2563eb', lineWidth: 2.75 }
+      : { fill: 'rgba(59,130,246,0.16)', stroke: '#2563eb', lineWidth: 2.75 }
+  }
+  if (variant === 'published') {
+    return { fill: 'rgba(168,85,247,0.18)', stroke: '#7e22ce', lineWidth: 2.75 }
+  }
+  return { fill: 'rgba(239,68,68,0.16)', stroke: '#dc2626', lineWidth: 2.75 }
 }
 
 function projectPoint(map: Map, position: Position) {
@@ -91,7 +106,14 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
   return lines
 }
 
-function drawTextBox(ctx: CanvasRenderingContext2D, map: Map, feature: Feature, selected: boolean) {
+function drawTextBox(
+  ctx: CanvasRenderingContext2D,
+  map: Map,
+  feature: Feature,
+  selected: boolean,
+  variant: RenderVariant,
+  lassoDraft: boolean,
+) {
   if (feature.geometry.type !== 'Polygon') return
   const ring = feature.geometry.coordinates[0] as Position[]
   const bounds = projectedBounds(map, ring)
@@ -99,12 +121,18 @@ function drawTextBox(ctx: CanvasRenderingContext2D, map: Map, feature: Feature, 
   const width = bounds.maxX - bounds.minX
   const height = bounds.maxY - bounds.minY
   if (width < 4 || height < 4) return
+  const style = variantStyle(variant, lassoDraft)
 
-  ctx.fillStyle = 'rgba(255,255,255,0.82)'
-  ctx.strokeStyle = selected ? '#38bdf8' : 'rgba(15,23,42,0.35)'
-  ctx.lineWidth = selected ? 2 : 1
+  ctx.fillStyle = variant === 'in-progress' ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.86)'
+  ctx.strokeStyle = style.stroke
+  ctx.lineWidth = style.lineWidth
   ctx.fillRect(bounds.minX, bounds.minY, width, height)
   ctx.strokeRect(bounds.minX, bounds.minY, width, height)
+  if (selected) {
+    ctx.strokeStyle = '#f97316'
+    ctx.lineWidth = style.lineWidth + 2
+    ctx.strokeRect(bounds.minX, bounds.minY, width, height)
+  }
 
   const props = feature.properties ?? {}
   const value = String(props.text ?? props.name ?? props.tag ?? '')
@@ -127,34 +155,39 @@ function drawFeature(
   map: Map,
   feature: Feature,
   selected: boolean,
-  published: boolean,
   lassoDraft: boolean,
-  draft = false,
+  variant: RenderVariant = 'saved-draft',
 ) {
   const geometry = feature.geometry as Geometry | null
   if (!geometry) return
-  const savedFill = published ? 'rgba(168,85,247,0.20)' : 'rgba(34,197,94,0.18)'
-  const savedStroke = published ? '#7e22ce' : '#15803d'
-  const draftFill = lassoDraft ? 'rgba(59,130,246,0.12)' : 'rgba(34,197,94,0.18)'
-  const draftStroke = lassoDraft ? '#2563eb' : '#15803d'
-  const fill = draft ? draftFill : savedFill
-  const stroke = selected ? '#38bdf8' : draft ? draftStroke : savedStroke
-  const lineWidth = selected ? 3 : draft ? 2.5 : 2
+  const style = variantStyle(variant, lassoDraft)
+  const fill = style.fill
+  const baseStroke = style.stroke
+  const lineWidth = style.lineWidth
 
   if (isTextFeature(feature)) {
-    drawTextBox(ctx, map, feature, selected)
+    drawTextBox(ctx, map, feature, selected, variant, lassoDraft)
     return
   }
 
   if (geometry.type === 'Polygon') {
     drawPolygonPath(ctx, map, geometry.coordinates as Position[][])
     ctx.fillStyle = fill
-    ctx.strokeStyle = stroke
+    ctx.strokeStyle = baseStroke
     ctx.lineWidth = lineWidth
     ctx.fill('evenodd')
     ctx.stroke()
+    if (selected) {
+      drawPolygonPath(ctx, map, geometry.coordinates as Position[][])
+      ctx.strokeStyle = '#f97316'
+      ctx.lineWidth = lineWidth + 2
+      ctx.stroke()
+    }
   } else if (geometry.type === 'MultiPolygon') {
-    drawMultiPolygon(ctx, map, geometry as MultiPolygon, fill, stroke, lineWidth)
+    drawMultiPolygon(ctx, map, geometry as MultiPolygon, fill, baseStroke, lineWidth)
+    if (selected) {
+      drawMultiPolygon(ctx, map, geometry as MultiPolygon, 'rgba(0,0,0,0)', '#f97316', lineWidth + 2)
+    }
   } else if (geometry.type === 'LineString') {
     ctx.beginPath()
     ;(geometry.coordinates as Position[]).forEach((position, index) => {
@@ -162,14 +195,31 @@ function drawFeature(
       if (index === 0) ctx.moveTo(point.x, point.y)
       else ctx.lineTo(point.x, point.y)
     })
-    ctx.strokeStyle = stroke
+    ctx.strokeStyle = baseStroke
     ctx.lineWidth = lineWidth
     ctx.stroke()
+    if (selected) {
+      ctx.beginPath()
+      ;(geometry.coordinates as Position[]).forEach((position, index) => {
+        const point = projectPoint(map, position)
+        if (index === 0) ctx.moveTo(point.x, point.y)
+        else ctx.lineTo(point.x, point.y)
+      })
+      ctx.strokeStyle = '#f97316'
+      ctx.lineWidth = lineWidth + 2
+      ctx.stroke()
+    }
   } else if (geometry.type === 'Point') {
     const point = projectPoint(map, geometry.coordinates as Position)
     ctx.beginPath()
-    ctx.arc(point.x, point.y, selected ? 7 : 5, 0, Math.PI * 2)
-    ctx.fillStyle = draft ? draftStroke : savedStroke
+    ctx.arc(point.x, point.y, selected ? 8 : 5, 0, Math.PI * 2)
+    if (selected) {
+      ctx.fillStyle = '#f97316'
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(point.x, point.y, 5, 0, Math.PI * 2)
+    }
+    ctx.fillStyle = baseStroke
     ctx.strokeStyle = '#ffffff'
     ctx.lineWidth = 2
     ctx.fill()
@@ -180,7 +230,7 @@ function drawFeature(
       ctx.beginPath()
       ctx.arc(point.x, point.y, 4, 0, Math.PI * 2)
       ctx.fillStyle = '#ffffff'
-      ctx.strokeStyle = draft ? draftStroke : savedStroke
+      ctx.strokeStyle = baseStroke
       ctx.lineWidth = 2
       ctx.fill()
       ctx.stroke()
@@ -190,9 +240,10 @@ function drawFeature(
 
 export function SpatialCanvasOverlay({
   map,
-  projectStatus = 'draft',
   draftMode = null,
   visibleFeatures,
+  publishedFeatures = [],
+  localDraftFeatureIds = [],
   selectedFeatureIds,
   draftCollection,
   snapPreview,
@@ -208,8 +259,24 @@ export function SpatialCanvasOverlay({
 
     let frame = 0
     const selectedSet = new Set(selectedFeatureIds)
-    const published = projectStatus === 'published'
     const lassoDraft = draftMode === 'delete_lasso'
+    const localDraftIds = new Set(localDraftFeatureIds)
+    const publishedById = new globalThis.Map(
+      publishedFeatures
+        .map((feature) => [featureId(feature), feature] as const)
+        .filter(([id]) => Boolean(id)),
+    )
+
+    const isPublishedFeature = (feature: Feature) => {
+      const id = featureId(feature)
+      if (!id) return false
+      const publishedFeature = publishedById.get(id)
+      if (!publishedFeature) return false
+      return (
+        JSON.stringify(publishedFeature.geometry) === JSON.stringify(feature.geometry) &&
+        JSON.stringify(publishedFeature.properties ?? {}) === JSON.stringify(feature.properties ?? {})
+      )
+    }
 
     const render = () => {
       const rect = canvas.getBoundingClientRect()
@@ -224,11 +291,23 @@ export function SpatialCanvasOverlay({
       ctx.clearRect(0, 0, rect.width, rect.height)
 
       visibleFeatures.forEach((feature) => {
-        drawFeature(ctx, map, feature, selectedSet.has(featureId(feature)), published, false)
+        const featureStateId = featureId(feature)
+        drawFeature(
+          ctx,
+          map,
+          feature,
+          selectedSet.has(featureStateId),
+          false,
+          localDraftIds.has(featureStateId)
+            ? 'in-progress'
+            : isPublishedFeature(feature)
+              ? 'published'
+              : 'saved-draft',
+        )
       })
 
       draftCollection?.features.forEach((feature) => {
-        drawFeature(ctx, map, feature as Feature, false, published, lassoDraft, true)
+        drawFeature(ctx, map, feature as Feature, false, lassoDraft, 'in-progress')
       })
 
       if (snapPreview) {
@@ -262,7 +341,7 @@ export function SpatialCanvasOverlay({
       map.off('zoom', schedule)
       map.off('resize', schedule)
     }
-  }, [draftCollection, draftMode, map, projectStatus, selectedFeatureIds, snapPreview, visibleFeatures])
+  }, [draftCollection, draftMode, localDraftFeatureIds, map, publishedFeatures, selectedFeatureIds, snapPreview, visibleFeatures])
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" />
 }

@@ -171,6 +171,7 @@ export interface DrawingProject {
   indoorMinZoom: number | null
   floors: SpatialFloor[]
   features: Feature[]
+  publishedFeatures?: Feature[]
   parentProjectId?: string | null
   sourceFeatureId?: string | null
   publishedAt?: number | null

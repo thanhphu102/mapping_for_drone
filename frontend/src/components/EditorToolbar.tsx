@@ -13,7 +13,8 @@ import type { DrawMode } from '../hooks/useDrawingEngine'
 interface EditorToolbarProps {
   toolsEnabled: boolean
   isSaving: boolean
-  draftFeature: GeoJSON.FeatureCollection | null
+  hasPendingChanges: boolean
+  hasSavableDraft: boolean
   project: { id: string; editorMode: EditorMode } | null
   canDrawOnFloor: boolean
   onSetMode: (mode: DrawMode) => void
@@ -29,7 +30,8 @@ interface EditorToolbarProps {
 export function EditorToolbar({
   toolsEnabled,
   isSaving,
-  draftFeature,
+  hasPendingChanges,
+  hasSavableDraft,
   project,
   canDrawOnFloor,
   onSetMode,
@@ -41,7 +43,7 @@ export function EditorToolbar({
   onZoomOut,
   zoomLabel,
 }: EditorToolbarProps) {
-  const saveReady = Boolean(toolsEnabled && draftFeature && !isSaving && canDrawOnFloor)
+  const saveReady = Boolean(toolsEnabled && !isSaving && canDrawOnFloor && (hasSavableDraft || hasPendingChanges))
 
   return (
     <div className="absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">

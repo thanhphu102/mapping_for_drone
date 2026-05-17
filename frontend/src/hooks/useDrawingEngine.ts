@@ -154,6 +154,9 @@ interface UseDrawingEngineOptions {
   onMoveFeatures?: (featureIds: string[], deltaLng: number, deltaLat: number) => void
   onMoveEnd?: (featureIds: string[]) => void
   onQuickCreateTextBox?: (start: Position, end: Position) => void
+  onCompleteBoxShape?: (mode: 'rectangle' | 'square' | 'triangle' | 'ellipse', start: Position, end: Position) => void
+  onCompletePenPath?: (points: Position[]) => void
+  onCompleteLasso?: (start: Position, end: Position) => void
 }
 
 export function useDrawingEngine({
@@ -172,10 +175,28 @@ export function useDrawingEngine({
   onMoveFeatures,
   onMoveEnd,
   onQuickCreateTextBox,
+  onCompleteBoxShape,
+  onCompletePenPath,
+  onCompleteLasso,
 }: UseDrawingEngineOptions) {
   const projectRef = useRef(project)
   const toolsEnabledRef = useRef(toolsEnabled)
   const onSaveDraftRef = useRef(onSaveDraft)
+  const onSetSelectionRef = useRef(onSetSelection)
+  const onDeleteFeaturesRef = useRef(onDeleteFeatures)
+  const onMoveFeaturesRef = useRef(onMoveFeatures)
+  const onMoveEndRef = useRef(onMoveEnd)
+  const onQuickCreateTextBoxRef = useRef(onQuickCreateTextBox)
+  const onCompleteBoxShapeRef = useRef(onCompleteBoxShape)
+  const onCompletePenPathRef = useRef(onCompletePenPath)
+  const onCompleteLassoRef = useRef(onCompleteLasso)
+  const boxStartRef = useRef<{ x: number; y: number } | null>(null)
+  const movingFeaturesRef = useRef<{ featureIds: string[]; lastLng: number; lastLat: number; moved: boolean } | null>(null)
+  const boxShapeStartRef = useRef<Position | null>(null)
+  const freehandStartedRef = useRef(false)
+  const freehandPointsRef = useRef<Position[]>([])
+  const lassoStartedRef = useRef(false)
+  const lassoStartRef = useRef<Position | null>(null)
 
   useEffect(() => {
     projectRef.current = project
@@ -188,6 +209,38 @@ export function useDrawingEngine({
   useEffect(() => {
     onSaveDraftRef.current = onSaveDraft
   }, [onSaveDraft])
+
+  useEffect(() => {
+    onSetSelectionRef.current = onSetSelection
+  }, [onSetSelection])
+
+  useEffect(() => {
+    onDeleteFeaturesRef.current = onDeleteFeatures
+  }, [onDeleteFeatures])
+
+  useEffect(() => {
+    onMoveFeaturesRef.current = onMoveFeatures
+  }, [onMoveFeatures])
+
+  useEffect(() => {
+    onMoveEndRef.current = onMoveEnd
+  }, [onMoveEnd])
+
+  useEffect(() => {
+    onQuickCreateTextBoxRef.current = onQuickCreateTextBox
+  }, [onQuickCreateTextBox])
+
+  useEffect(() => {
+    onCompleteBoxShapeRef.current = onCompleteBoxShape
+  }, [onCompleteBoxShape])
+
+  useEffect(() => {
+    onCompletePenPathRef.current = onCompletePenPath
+  }, [onCompletePenPath])
+
+  useEffect(() => {
+    onCompleteLassoRef.current = onCompleteLasso
+  }, [onCompleteLasso])
 
   const suppressClickRef = useRef(false)
   const constrainSquareByPixels = useCallback((start: Position, rawEnd: Position): Position => {
@@ -229,12 +282,12 @@ export function useDrawingEngine({
             const nextIds = currentIds.includes(String(firstId))
               ? currentIds.filter((id) => id !== String(firstId))
               : [...currentIds, String(firstId)]
-            onSetSelection(nextIds)
+            onSetSelectionRef.current(nextIds)
           } else {
-            onSetSelection([String(firstId)])
+            onSetSelectionRef.current([String(firstId)])
           }
         } else if (!event.originalEvent?.shiftKey) {
-          onSetSelection([])
+          onSetSelectionRef.current([])
         }
         return
       }
@@ -256,19 +309,11 @@ export function useDrawingEngine({
         return [...current, point]
       })
     },
-    [isMounted, modeRef, onAddPoint, onMessage, snapPreviewRef, map, onSetSelection, selectedFeatureIdsRef],
+    [isMounted, modeRef, onAddPoint, onMessage, snapPreviewRef, map, selectedFeatureIdsRef],
   )
 
   useEffect(() => {
     if (!map) return
-
-    let boxStart: { x: number; y: number } | null = null
-    let movingFeatures: { featureIds: string[]; lastLng: number; lastLat: number; moved: boolean } | null = null
-    let boxShapeStart: Position | null = null
-    let freehandStarted = false
-    let freehandPoints: Position[] = []
-    let lassoStarted = false
-    let lassoStart: Position | null = null
 
     const setCursor = (value: string) => {
       map.getCanvas().style.cursor = value
@@ -281,7 +326,7 @@ export function useDrawingEngine({
       if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse' || mode === 'text') {
         if (e.originalEvent.button !== 0) return
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
-        boxShapeStart = start
+        boxShapeStartRef.current = start
         onAddPoint(() => [start, start])
         map.dragPan.disable()
         setCursor('crosshair')
@@ -291,9 +336,14 @@ export function useDrawingEngine({
       if (mode === 'pen') {
         if (e.originalEvent.button !== 0) return
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
-        freehandPoints = [start]
+        const currentProject = projectRef.current
+        if (!currentProject || !pointInBoundary(start, currentProject, map)) {
+          if (isMounted()) onMessage('Point rejected: it is outside the locked base boundary')
+          return
+        }
+        freehandPointsRef.current = [start]
         onAddPoint(() => [start])
-        freehandStarted = true
+        freehandStartedRef.current = true
         map.dragPan.disable()
         setCursor('crosshair')
         return
@@ -302,9 +352,9 @@ export function useDrawingEngine({
       if (mode === 'delete_lasso') {
         if (e.originalEvent.button !== 0) return
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
-        lassoStart = start
+        lassoStartRef.current = start
         onAddPoint(() => [start, start])
-        lassoStarted = true
+        lassoStartedRef.current = true
         map.dragPan.disable()
         setCursor('crosshair')
         return
@@ -316,7 +366,7 @@ export function useDrawingEngine({
       }
 
       if (mode === 'select' && e.originalEvent?.shiftKey) {
-        boxStart = { x: e.point.x, y: e.point.y }
+        boxStartRef.current = { x: e.point.x, y: e.point.y }
         setCursor('crosshair')
         return
       }
@@ -328,8 +378,8 @@ export function useDrawingEngine({
         if (firstId) {
           const currentSelection = selectedFeatureIdsRef.current ?? []
           const featureIds = currentSelection.includes(firstId) ? currentSelection : [firstId]
-          onSetSelection(featureIds)
-          movingFeatures = {
+          onSetSelectionRef.current(featureIds)
+          movingFeaturesRef.current = {
             featureIds,
             lastLng: e.lngLat.lng,
             lastLat: e.lngLat.lat,
@@ -344,45 +394,49 @@ export function useDrawingEngine({
     }
 
     const handleMouseMove = (e: MapMouseEvent) => {
-      if (boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
+      if (boxShapeStartRef.current && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
         const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
         const mode = modeRef.current
         const shiftPressed = Boolean(e.originalEvent?.shiftKey)
         const end: Position =
           (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shiftPressed
-            ? constrainSquareByPixels(boxShapeStart!, rawEnd)
+            ? constrainSquareByPixels(boxShapeStartRef.current, rawEnd)
             : rawEnd
-        onAddPoint(() => [boxShapeStart!, end])
+        onAddPoint(() => [boxShapeStartRef.current!, end])
         return
       }
 
-      if (lassoStarted && modeRef.current === 'delete_lasso') {
+      if (lassoStartedRef.current && modeRef.current === 'delete_lasso') {
         const point: Position = [e.lngLat.lng, e.lngLat.lat]
-        onAddPoint(() => [lassoStart ?? point, point])
+        onAddPoint(() => [lassoStartRef.current ?? point, point])
         return
       }
 
-      if (freehandStarted && modeRef.current === 'pen') {
+      if (freehandStartedRef.current && modeRef.current === 'pen') {
         const point: Position = [e.lngLat.lng, e.lngLat.lat]
+        const currentProject = projectRef.current
+        if (!currentProject || !pointInBoundary(point, currentProject, map)) {
+          return
+        }
         onAddPoint((cur) => {
           if (cur.length === 0) return [point]
           const last = cur[cur.length - 1]
           const d = Math.hypot(point[0] - last[0], point[1] - last[1])
           if (d < 0.00001) return cur
-          freehandPoints = [...cur, point]
+          freehandPointsRef.current = [...cur, point]
           return [...cur, point]
         })
         return
       }
 
-      if (movingFeatures && onMoveFeatures) {
-        const deltaLng = e.lngLat.lng - movingFeatures.lastLng
-        const deltaLat = e.lngLat.lat - movingFeatures.lastLat
+      if (movingFeaturesRef.current && onMoveFeaturesRef.current) {
+        const deltaLng = e.lngLat.lng - movingFeaturesRef.current.lastLng
+        const deltaLat = e.lngLat.lat - movingFeaturesRef.current.lastLat
         if (Math.abs(deltaLng) > 0 || Math.abs(deltaLat) > 0) {
-          onMoveFeatures(movingFeatures.featureIds, deltaLng, deltaLat)
-          movingFeatures.lastLng = e.lngLat.lng
-          movingFeatures.lastLat = e.lngLat.lat
-          movingFeatures.moved = true
+          onMoveFeaturesRef.current(movingFeaturesRef.current.featureIds, deltaLng, deltaLat)
+          movingFeaturesRef.current.lastLng = e.lngLat.lng
+          movingFeaturesRef.current.lastLat = e.lngLat.lat
+          movingFeaturesRef.current.moved = true
         }
         return
       }
@@ -390,21 +444,21 @@ export function useDrawingEngine({
     }
 
     const handleMouseUp = (e: MapMouseEvent) => {
-      if (movingFeatures) {
-        const movedFeatureIds = movingFeatures.featureIds
-        const didMove = movingFeatures.moved
-        movingFeatures = null
+      if (movingFeaturesRef.current) {
+        const movedFeatureIds = movingFeaturesRef.current.featureIds
+        const didMove = movingFeaturesRef.current.moved
+        movingFeaturesRef.current = null
         setCursor('')
         map.dragPan.disable()
         if (didMove) {
           suppressClickRef.current = true
-          onMoveEnd?.(movedFeatureIds)
+          onMoveEndRef.current?.(movedFeatureIds)
         }
       }
 
-      if (boxShapeStart && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
-        const start = boxShapeStart
-        boxShapeStart = null
+      if (boxShapeStartRef.current && ['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(modeRef.current)) {
+        const start = boxShapeStartRef.current
+        boxShapeStartRef.current = null
         setCursor('')
         map.dragPan.disable()
         suppressClickRef.current = true
@@ -419,39 +473,46 @@ export function useDrawingEngine({
         if (d > 0.000001) {
           onAddPoint(() => [start, end])
           if (mode === 'text') {
-            onQuickCreateTextBox?.(start, end)
+            onQuickCreateTextBoxRef.current?.(start, end)
             onAddPoint(() => [])
           } else if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse') {
+            onCompleteBoxShapeRef.current?.(mode, start, end)
+            onAddPoint(() => [])
           }
         } else {
           onAddPoint(() => [])
         }
       }
 
-      if (freehandStarted && modeRef.current === 'pen') {
-        freehandStarted = false
+      if (freehandStartedRef.current && modeRef.current === 'pen') {
+        freehandStartedRef.current = false
         setCursor('')
         map.dragPan.disable()
         suppressClickRef.current = true
-        if (freehandPoints.length >= 2) {
+        if (freehandPointsRef.current.length >= 2) {
+          onCompletePenPathRef.current?.(freehandPointsRef.current)
+          onAddPoint(() => [])
         }
-        freehandPoints = []
+        freehandPointsRef.current = []
       }
 
-      if (lassoStarted && modeRef.current === 'delete_lasso') {
-        lassoStarted = false
-        lassoStart = null
+      if (lassoStartedRef.current && modeRef.current === 'delete_lasso') {
+        lassoStartedRef.current = false
         setCursor('')
         map.dragPan.disable()
         suppressClickRef.current = true
-        onSaveDraftRef.current()
+        const start = lassoStartRef.current ?? [e.lngLat.lng, e.lngLat.lat]
+        const end: Position = [e.lngLat.lng, e.lngLat.lat]
+        lassoStartRef.current = null
+        onAddPoint(() => [start, end])
+        onCompleteLassoRef.current?.(start, end)
       }
 
-      if (boxStart) {
-        const minX = Math.min(boxStart.x, e.point.x)
-        const minY = Math.min(boxStart.y, e.point.y)
-        const maxX = Math.max(boxStart.x, e.point.x)
-        const maxY = Math.max(boxStart.y, e.point.y)
+      if (boxStartRef.current) {
+        const minX = Math.min(boxStartRef.current.x, e.point.x)
+        const minY = Math.min(boxStartRef.current.y, e.point.y)
+        const maxX = Math.max(boxStartRef.current.x, e.point.x)
+        const maxY = Math.max(boxStartRef.current.y, e.point.y)
         const hits = map.queryRenderedFeatures(
           [
             [minX, minY],
@@ -462,8 +523,8 @@ export function useDrawingEngine({
         const uniqueIds = Array.from(
           new Set(hits.map((f) => String(f.id ?? f.properties?.id ?? '')).filter(Boolean)),
         )
-        onSetSelection(uniqueIds)
-        boxStart = null
+        onSetSelectionRef.current(uniqueIds)
+        boxStartRef.current = null
         setCursor('')
       }
     }
@@ -472,9 +533,9 @@ export function useDrawingEngine({
       const hits = map.queryRenderedFeatures(e.point, { layers: featureLayers })
       const first = hits.find((f) => f.id || f.properties?.id)
       const firstId = first?.id ?? first?.properties?.id
-      if (firstId && onDeleteFeatures) {
+      if (firstId && onDeleteFeaturesRef.current) {
         e.preventDefault()
-        onDeleteFeatures([String(firstId)])
+        onDeleteFeaturesRef.current([String(firstId)])
         return
       }
 
@@ -505,7 +566,7 @@ export function useDrawingEngine({
       map.off('dblclick', handleDblClick)
       map.doubleClickZoom.enable()
     }
-  }, [map, handleMapClick, onAddPoint, snapPreviewRef, modeRef, onDeleteFeatures, onSetSelection, selectedFeatureIdsRef, onMoveFeatures, onMoveEnd, onQuickCreateTextBox, constrainSquareByPixels])
+  }, [map, handleMapClick, onAddPoint, modeRef, selectedFeatureIdsRef, constrainSquareByPixels])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
