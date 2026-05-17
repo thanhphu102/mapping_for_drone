@@ -99,13 +99,15 @@ export function useMapRenderer({
   projectConfig,
   visibleFeatures,
   selectedFeatureIds,
-  draftCollection,
-  snapPreview,
+  draftCollection: _draftCollection,
+  snapPreview: _snapPreview,
   isMounted,
   onBoundaryRendered,
   onMessage,
 }: UseMapRendererOptions) {
   const boundaryFittedProjectIdRef = useRef<string | null>(null)
+  void _draftCollection
+  void _snapPreview
 
   useEffect(() => {
     if (!map || !project) {
@@ -115,34 +117,17 @@ export function useMapRenderer({
       return
     }
 
-    const baseFeature = boundaryFeature(project)
-    const baseCollection = featureCollection([baseFeature])
     const dimCollection = featureCollection([dimMaskFeature(project)])
-    const projectFeatureCollection = featureCollection(visibleFeatures)
-    const draftCollectionFeature = draftCollection ?? { type: 'FeatureCollection', features: [] }
-    const snapCollection = featureCollection(
-      snapPreview
-        ? [
-          {
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: snapPreview.point },
-            properties: { kind: snapPreview.kind },
-          } as Feature,
-        ]
-        : [],
-    )
-    // --- Sources ---
     if (!getSourceSafe(map, boundarySourceId)) {
-      map.addSource(boundarySourceId, { type: 'geojson', data: baseCollection })
-    } else {
-      getSourceSafe(map, boundarySourceId)?.setData(baseCollection)
+      map.addSource(boundarySourceId, {
+        type: 'geojson',
+        data: featureCollection([boundaryFeature(project)]),
+      })
     }
 
     if (projectConfig.canvasMode === 'dimOutside') {
       if (!getSourceSafe(map, dimMaskSourceId)) {
         map.addSource(dimMaskSourceId, { type: 'geojson', data: dimCollection })
-      } else {
-        getSourceSafe(map, dimMaskSourceId)?.setData(dimCollection)
       }
     } else {
       if (map.getLayer(dimMaskLayerId)) {
@@ -154,24 +139,17 @@ export function useMapRenderer({
     }
 
     if (!getSourceSafe(map, featureSourceId)) {
-      map.addSource(featureSourceId, { type: 'geojson', data: projectFeatureCollection })
-    } else {
-      getSourceSafe(map, featureSourceId)?.setData(projectFeatureCollection)
+      map.addSource(featureSourceId, { type: 'geojson', data: featureCollection([]) })
     }
 
     if (!getSourceSafe(map, draftSourceId)) {
-      map.addSource(draftSourceId, { type: 'geojson', data: draftCollectionFeature })
-    } else {
-      getSourceSafe(map, draftSourceId)?.setData(draftCollectionFeature)
+      map.addSource(draftSourceId, { type: 'geojson', data: featureCollection([]) })
     }
 
     if (!getSourceSafe(map, snapPreviewSourceId)) {
-      map.addSource(snapPreviewSourceId, { type: 'geojson', data: snapCollection })
-    } else {
-      getSourceSafe(map, snapPreviewSourceId)?.setData(snapCollection)
+      map.addSource(snapPreviewSourceId, { type: 'geojson', data: featureCollection([]) })
     }
 
-    // --- Layers ---
     if (projectConfig.canvasMode === 'dimOutside' && !map.getLayer(dimMaskLayerId)) {
       map.addLayer({
         id: dimMaskLayerId,
@@ -256,13 +234,10 @@ export function useMapRenderer({
       })
     }
 
-    // --- Fit bounds once per project ---
-    map.resize()
     requestAnimationFrame(() => {
       if (!map || !mapReadyForStyle(map, mapLoaded)) {
         return
       }
-      map.resize()
       if (boundaryFittedProjectIdRef.current !== project.id) {
         const [minLng, minLat, maxLng, maxLat] = boundaryBBox(project)
         map.fitBounds(
@@ -279,7 +254,27 @@ export function useMapRenderer({
         onMessage('Base boundary rendered')
       }
     })
-  }, [draftCollection, mapReady, mapLoaded, project, projectConfig.canvasMode, snapPreview, visibleFeatures, selectedFeatureIds, map, isMounted, onBoundaryRendered, onMessage])
+  }, [mapReady, mapLoaded, project, projectConfig.canvasMode, map, isMounted, onBoundaryRendered, onMessage])
+
+  useEffect(() => {
+    if (!map || !project) {
+      return
+    }
+    if (!mapReadyForStyle(map, mapLoaded)) {
+      return
+    }
+
+    const baseCollection = featureCollection([boundaryFeature(project)])
+    const dimCollection = featureCollection([dimMaskFeature(project)])
+    const projectFeatureCollection = featureCollection(visibleFeatures)
+
+    getSourceSafe(map, boundarySourceId)?.setData(baseCollection)
+    getSourceSafe(map, featureSourceId)?.setData(projectFeatureCollection)
+
+    if (projectConfig.canvasMode === 'dimOutside') {
+      getSourceSafe(map, dimMaskSourceId)?.setData(dimCollection)
+    }
+  }, [mapLoaded, project, projectConfig.canvasMode, visibleFeatures, map])
 
   useEffect(() => {
     if (!map || !project || !mapReadyForStyle(map, mapLoaded)) return
@@ -303,9 +298,10 @@ export function useMapRenderer({
 
     const currentZoom = map.getZoom()
     const isPrecision = currentZoom >= projectConfig.precisionZoom
-    const osmLayer = map.getLayer('osm')
+    const osmLayerId = 'editor-osm-basemap'
+    const osmLayer = map.getLayer(osmLayerId)
     if (osmLayer) {
-      map.setPaintProperty('osm', 'raster-opacity', isPrecision ? 0.3 : 1)
+      map.setPaintProperty(osmLayerId, 'raster-opacity', isPrecision ? 0.2 : 0.28)
     }
 
   }, [map, mapLoaded, project, projectConfig.precisionZoom, mapReady, mapZoom])

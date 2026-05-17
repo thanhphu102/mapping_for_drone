@@ -740,7 +740,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         setUserMode('select')
       }
     }
-  }, [canDrawOnFloor, makeDraftFeatureId, project, selectedFloorId, stageCreatedFeature, textBoxDraft, toolsEnabled])
+  }, [canDrawOnFloor, makeDraftFeatureId, map, project, selectedFloorId, stageCreatedFeature, textBoxDraft, toolsEnabled])
 
   const handleCancelTextBox = useCallback(() => {
     setTextBoxDraft(null)
