@@ -18,6 +18,8 @@ It is now tuned for web engineering work: HTTP/WebSocket contracts, browser beha
   - API contracts, runtime components, state model, and key files.
 - Explanation: [explanation-architecture.md](explanation-architecture.md)
   - Why the architecture is designed this way and its current trade-offs.
+- Branch Explanation: [explanation-map-canvas-branch-changes.md](explanation-map-canvas-branch-changes.md)
+  - What changed in the `map-canvas` branch and what reviewers should verify.
 
 ## Scope
 

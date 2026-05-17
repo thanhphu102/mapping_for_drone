@@ -255,7 +255,7 @@ function projectsToFeatureCollection(
   return {
     type: 'FeatureCollection',
     features: projects.flatMap((project) =>
-      project.features
+      (project.publishedFeatures ?? [])
         .filter((feature) => {
           if (!selectedProjectId || project.id !== selectedProjectId) return true
           if (!selectedFloorId) return true
@@ -495,7 +495,7 @@ export function DroneMap({
           source: overlayFeatureSourceId,
           filter: ['==', ['geometry-type'], 'Polygon'],
           paint: {
-            'fill-color': '#22c55e',
+            'fill-color': '#a855f7',
             'fill-opacity': 0.24,
           },
         })
@@ -506,7 +506,7 @@ export function DroneMap({
           type: 'line',
           source: overlayFeatureSourceId,
           paint: {
-            'line-color': '#15803d',
+            'line-color': '#7e22ce',
             'line-width': 3,
           },
         })
@@ -518,7 +518,7 @@ export function DroneMap({
           source: overlayFeatureSourceId,
           filter: ['==', ['geometry-type'], 'Point'],
           paint: {
-            'circle-color': '#15803d',
+            'circle-color': '#7e22ce',
             'circle-radius': 5,
             'circle-stroke-color': '#ffffff',
             'circle-stroke-width': 1.5,

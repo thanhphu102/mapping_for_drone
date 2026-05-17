@@ -15,6 +15,7 @@ const featurePointLayerId = 'project-features-point'
 const dimMaskSourceId = 'dim-mask'
 const dimMaskLayerId = 'dim-mask-fill'
 const snapPreviewSourceId = 'snap-preview'
+const baseBoundaryOutlineColor = '#f97316'
 
 function mapReadyForStyle(map: Map, mapLoaded: boolean) {
   return mapLoaded && map.isStyleLoaded()
@@ -194,9 +195,10 @@ export function useMapRenderer({
         id: baseBoundaryOutlineLayerId,
         type: 'line',
         source: boundarySourceId,
-        paint: { 'line-color': '#0369a1', 'line-opacity': 1, 'line-width': 3 },
+        paint: { 'line-color': baseBoundaryOutlineColor, 'line-opacity': 1, 'line-width': 3 },
       })
     }
+    map.setPaintProperty(baseBoundaryOutlineLayerId, 'line-color', baseBoundaryOutlineColor)
 
     if (!map.getLayer(featureFillLayerId)) {
       map.addLayer({

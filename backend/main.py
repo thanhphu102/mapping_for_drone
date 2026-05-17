@@ -6,6 +6,7 @@ import json
 import os
 import math
 import time
+import ssl
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Literal
@@ -69,6 +70,10 @@ class SaveFeatureRequest(BaseModel):
     feature: Dict[str, Any]
 
 
+def clone_json_value(value: Any) -> Any:
+    return json.loads(json.dumps(value))
+
+
 def load_projects() -> Dict[str, Any]:
     if not projects_path.exists():
         return {"projects": []}
@@ -126,10 +131,13 @@ def fetch_osm_full(osm_type: OsmType, osm_id: int) -> Dict[str, Any]:
         url,
         headers={"User-Agent": "mapping-for-drone-spatial-editor/0.1"},
     )
+    ctx = ssl._create_unverified_context()
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=20, context=ctx) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as exc:
+        print(f"OSM API request failed URL: {url}")
+        print(f"OSM API request exception: {repr(exc)}")
         raise HTTPException(status_code=502, detail=f"OSM API request failed: {exc}") from exc
 
 
@@ -713,6 +721,20 @@ def normalize_feature(feature: Dict[str, Any]) -> Dict[str, Any]:
     return next_feature
 
 
+def ensure_project_feature_snapshots(project: Dict[str, Any]) -> None:
+    features = project.get("features")
+    if not isinstance(features, list):
+        project["features"] = []
+        features = project["features"]
+    published_features = project.get("publishedFeatures")
+    if isinstance(published_features, list):
+        return
+    if project.get("status") == "published":
+        project["publishedFeatures"] = clone_json_value(features)
+    else:
+        project["publishedFeatures"] = []
+
+
 def feature_to_project_geojson(row: Dict[str, Any]) -> Dict[str, Any]:
     geometry = row.get("geometry")
     if isinstance(geometry, str):
@@ -735,6 +757,7 @@ def project_row_to_dict(
     base_geometry = row.get("base_geometry")
     if isinstance(base_geometry, str):
         base_geometry = json.loads(base_geometry)
+    ensure_project_feature_snapshots(row)
     return {
         "id": str(row["id"]),
         "name": row["name"],
@@ -759,7 +782,8 @@ def project_row_to_dict(
         "indoorMinZoom": row.get("indoor_min_zoom"),
         "layers": row.get("layers") or [],
         "floors": row.get("floors") or [],
-        "features": features or [],
+        "features": features if features is not None else row.get("features") or [],
+        "publishedFeatures": row.get("publishedFeatures") or [],
         "parentProjectId": str(row["parent_project_id"]) if row.get("parent_project_id") else None,
         "sourceFeatureId": row.get("source_feature_id"),
         "createdAt": timestamp_value(row.get("created_at")),
@@ -781,6 +805,7 @@ def get_project_json(project_id: str) -> Dict[str, Any] | None:
     data = load_projects()
     for project in data["projects"]:
         if project.get("id") == project_id:
+            ensure_project_feature_snapshots(project)
             return project
     return None
 
@@ -790,6 +815,7 @@ def save_feature_json(project_id: str, feature: Dict[str, Any]) -> Dict[str, Any
     for project in data["projects"]:
         if project.get("id") != project_id:
             continue
+        ensure_project_feature_snapshots(project)
         validate_feature_inside_boundary(feature, project["baseGeometry"])
         next_feature = normalize_feature(feature)
         next_feature["properties"]["updatedAt"] = int(time.time())
@@ -815,7 +841,9 @@ def publish_project_json(project_id: str) -> Dict[str, Any] | None:
     data = load_projects()
     for project in data["projects"]:
         if project.get("id") == project_id:
+            ensure_project_feature_snapshots(project)
             project["status"] = "published"
+            project["publishedFeatures"] = clone_json_value(project.get("features") or [])
             project["updatedAt"] = int(time.time())
             project["publishedAt"] = int(time.time())
             save_projects(data)
@@ -873,6 +901,7 @@ def map_overlays_json(min_lng: float, min_lat: float, max_lng: float, max_lat: f
     for project in load_projects()["projects"]:
         if project.get("status") != "published":
             continue
+        ensure_project_feature_snapshots(project)
         project_bbox = project.get("bbox") or geometry_bbox(project.get("baseGeometry", {}))
         intersects = not (
             project_bbox[2] < min_lng
@@ -906,6 +935,7 @@ async def get_project_features_record(project_id: str) -> List[Dict[str, Any]] |
     project = await get_project_record(project_id)
     if project is None:
         return None
+    ensure_project_feature_snapshots(project)
     features = project.get("features")
     return features if isinstance(features, list) else []
 
@@ -920,6 +950,7 @@ async def get_project_visible_features_record(
     project = await get_project_record(project_id)
     if project is None:
         return None
+    ensure_project_feature_snapshots(project)
 
     features = project.get("features") if isinstance(project.get("features"), list) else []
     visible_features = []
@@ -1010,6 +1041,7 @@ def build_project_payload(
         "config": default_project_config(editor_mode),
         "floors": default_floors(editor_mode),
         "features": [],
+        "publishedFeatures": [],
         "parentProjectId": parent_project_id,
         "sourceFeatureId": source_feature_id,
         "createdAt": now,
@@ -1321,6 +1353,7 @@ async def list_drawing_projects(
     for project in projects:
         if not isinstance(project, dict):
             continue
+        ensure_project_feature_snapshots(project)
         if parentProjectId is not None and str(project.get("parentProjectId") or "") != parentProjectId:
             continue
         if osmType is not None and str(project.get("osmType") or "") != osmType:
@@ -1385,6 +1418,7 @@ async def delete_drawing_feature(project_id: str, feature_id: str):
         for project in data["projects"]:
             if project.get("id") != project_id:
                 continue
+            ensure_project_feature_snapshots(project)
             features = project.get("features", [])
             original_length = len(features)
             project["features"] = [f for f in features if f.get("id") != feature_id]

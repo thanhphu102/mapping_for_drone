@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, Position } from 'geojson'
 import type { Map as MapLibreMap } from 'maplibre-gl'
+import { ArrowLeft } from 'lucide-react'
 import type { DrawingProject, ProjectCanvasConfig } from '../types/drone'
 import {
   fetchDrawingProject,
@@ -25,11 +26,25 @@ import { useMapRenderer } from '../hooks/useMapRenderer'
 import { useSnapEngine, type SnapPreview } from '../hooks/useSnapEngine'
 import {
   useDrawingEngine,
+  type BoxShapeVariant,
   type DrawMode,
   featureTypeForMode,
   draftToFeatures,
+  featureInsideBoundary,
+  rotateFeatureGeometry,
   translateFeatureGeometry,
 } from '../hooks/useDrawingEngine'
+
+function isEditableEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  const tagName = target.tagName
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return true
+  }
+  return Boolean(target.closest('[contenteditable="true"]'))
+}
 
 const DEFAULT_PROJECT_CONFIG: ProjectCanvasConfig = {
   canvasMode: 'normal',
@@ -129,6 +144,9 @@ function InlineTextBoxEditor({
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         event.stopPropagation()
+        if (event.nativeEvent.isComposing || event.key === 'Process') {
+          return
+        }
         if (event.key === 'Escape') {
           event.preventDefault()
           cancelRef.current = true
@@ -158,10 +176,14 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const snapPreviewRef = useRef<SnapPreview | null>(null)
   const selectedFeatureIdsRef = useRef<string[]>([])
   const visibleFeaturesRef = useRef<Feature[]>([])
+  const tempFeatureCounterRef = useRef(0)
 
   // --- Core state ---
   const [project, setProject] = useState<DrawingProject | null>(null)
-  const [visibleFeatures, setVisibleFeatures] = useState<Feature[]>([])
+  const [serverFeatures, setServerFeatures] = useState<Feature[]>([])
+  const [pendingCreatedFeatures, setPendingCreatedFeatures] = useState<Feature[]>([])
+  const [pendingUpdatedFeatures, setPendingUpdatedFeatures] = useState<Record<string, Feature>>({})
+  const [pendingDeletedFeatureIds, setPendingDeletedFeatureIds] = useState<string[]>([])
   const [userMode, setUserMode] = useState<DrawMode>('select')
   const [draftPoints, setDraftPoints] = useState<Position[]>([])
   const [hoverCoordinate, setHoverCoordinate] = useState<Position | null>(null)
@@ -178,6 +200,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [isCreatingFloor, setIsCreatingFloor] = useState(false)
   const [isUpdatingFloor, setIsUpdatingFloor] = useState(false)
   const [textBoxDraft, setTextBoxDraft] = useState<{ start: Position; end: Position; text: string } | null>(null)
+  const [boxShapeVariant, setBoxShapeVariant] = useState<BoxShapeVariant | null>(null)
 
   // --- Child project navigation ---
   const [projectStack, setProjectStack] = useState<Array<{ id: string; name: string }>>([])
@@ -204,8 +227,36 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const mode = useMemo<DrawMode>(() => userMode, [userMode])
 
   const activeFeatureType = featureTypeForMode(mode)
-  const draftCollection = draftToFeatures(mode, draftPoints, activeFeatureType, hoverCoordinate, map)
+  const currentDraftCollection = draftToFeatures(mode, draftPoints, activeFeatureType, hoverCoordinate, map, boxShapeVariant)
   const toolsEnabled = mapReady
+
+  const featureIdForState = useCallback((feature: Feature) => String(feature.id ?? feature.properties?.id ?? ''), [])
+
+  const visibleFeatures = useMemo(() => {
+    const deleted = new Set(pendingDeletedFeatureIds)
+    const updated = pendingUpdatedFeatures
+    const merged = serverFeatures
+      .filter((feature) => {
+        const id = featureIdForState(feature)
+        return !deleted.has(id)
+      })
+      .map((feature) => updated[featureIdForState(feature)] ?? feature)
+    return [...merged, ...pendingCreatedFeatures]
+  }, [featureIdForState, pendingCreatedFeatures, pendingDeletedFeatureIds, pendingUpdatedFeatures, serverFeatures])
+
+  const draftCollection = currentDraftCollection
+  const localDraftFeatureIds = useMemo(
+    () => [
+      ...pendingCreatedFeatures.map((feature) => featureIdForState(feature)),
+      ...Object.keys(pendingUpdatedFeatures),
+    ],
+    [featureIdForState, pendingCreatedFeatures, pendingUpdatedFeatures],
+  )
+
+  const makeDraftFeatureId = useCallback(() => {
+    tempFeatureCounterRef.current += 1
+    return `draft-local-${tempFeatureCounterRef.current}`
+  }, [])
 
   // Derive floor info
   const floors = useMemo(() => {
@@ -267,6 +318,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       setMessage('Select a floor before drawing')
       return
     }
+    setBoxShapeVariant(null)
     setUserMode(newMode)
   }, [canDrawOnFloor])
 
@@ -277,7 +329,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   const handleZoomOut = useCallback(() => {
     if (!map) return
-    map.zoomOut({ duration: 120 })
+    const nextZoom = Math.max(10, map.getZoom() - 1)
+    map.easeTo({ zoom: nextZoom, duration: 120 })
   }, [map])
 
   const isMounted = useCallback(() => isMountedRef.current, [])
@@ -298,6 +351,97 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     setHoverCoordinate(coord)
   }, [])
 
+  const buildFeatureForStorage = useCallback((feature: Feature, featureType: string) => {
+    if (!project) return null
+    return {
+      ...feature,
+      properties: {
+        ...(feature.properties ?? {}),
+        featureType,
+        tag: String((feature.properties as Record<string, unknown> | undefined)?.tag ?? ''),
+        noteText: String((feature.properties as Record<string, unknown> | undefined)?.noteText ?? ''),
+        minZoom: (feature.properties as Record<string, unknown> | undefined)?.minZoom ?? project.boundaryMinZoom,
+        maxZoom: (feature.properties as Record<string, unknown> | undefined)?.maxZoom ?? 24,
+        floorId: (feature.properties as Record<string, unknown> | undefined)?.floorId ?? selectedFloorId ?? null,
+      },
+    } as Feature
+  }, [project, selectedFloorId])
+
+  const buildFinalFeatureFromPoints = useCallback((
+    targetMode: DrawMode,
+    points: Position[],
+    targetFeatureType: string,
+    shapeVariant: BoxShapeVariant | null = null,
+  ) => {
+    if (!project) return null
+    const collection = draftToFeatures(targetMode, points, targetFeatureType, null, map, shapeVariant)
+    const finalFeature = collection?.features.find(
+      (feature) =>
+        !feature.properties?.isDraftVertex &&
+        (feature.geometry.type === 'Polygon' || feature.geometry.type === 'LineString' || feature.geometry.type === 'Point'),
+    )
+    if (!finalFeature) return null
+    if (!featureInsideBoundary(finalFeature as Feature, project, map)) {
+      return null
+    }
+    return buildFeatureForStorage(finalFeature as Feature, targetFeatureType)
+  }, [buildFeatureForStorage, map, project])
+
+  const stageCreatedFeature = useCallback((feature: Feature, options?: { select?: boolean }) => {
+    const nextFeature: Feature = {
+      ...feature,
+      id: feature.id ?? makeDraftFeatureId(),
+      properties: {
+        ...(feature.properties ?? {}),
+      },
+    }
+    setPendingCreatedFeatures((current) => [...current, nextFeature])
+    if (options?.select) {
+      setSelectedFeatureIds([String(nextFeature.id ?? nextFeature.properties?.id ?? '')])
+    }
+  }, [makeDraftFeatureId])
+
+  const applyLocalFeatureUpdate = useCallback(
+    (featureIds: string[], updateFeature: (feature: Feature) => Feature) => {
+      const featureSet = new Set(featureIds)
+      const currentVisible = visibleFeaturesRef.current
+      const pendingCreatedIds = new Set(pendingCreatedFeatures.map((feature) => featureIdForState(feature)))
+      setPendingCreatedFeatures((current) =>
+        current.map((feature) => {
+          const id = featureIdForState(feature)
+          return featureSet.has(id) ? updateFeature(feature) : feature
+        }),
+      )
+      setPendingUpdatedFeatures((current) => {
+        const next = { ...current }
+        for (const featureId of featureIds) {
+          if (pendingCreatedIds.has(featureId)) {
+            continue
+          }
+          const existingPending = current[featureId]
+          const baseFeature =
+            existingPending ??
+            currentVisible.find((feature) => featureIdForState(feature) === featureId)
+          if (!baseFeature) continue
+          next[featureId] = updateFeature(baseFeature)
+        }
+        return next
+      })
+    },
+    [featureIdForState, pendingCreatedFeatures],
+  )
+
+  const currentSavableDraftFeature = useMemo(
+    () => buildFinalFeatureFromPoints(mode, draftPoints, activeFeatureType, boxShapeVariant),
+    [activeFeatureType, boxShapeVariant, buildFinalFeatureFromPoints, draftPoints, mode],
+  )
+  const hasPendingChanges = Boolean(
+    pendingCreatedFeatures.length > 0 ||
+    Object.keys(pendingUpdatedFeatures).length > 0 ||
+    pendingDeletedFeatureIds.length > 0 ||
+    currentSavableDraftFeature,
+  )
+
   // --- Hooks ---
   useSnapEngine({
     map,
@@ -311,46 +455,75 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   })
 
   // --- Save / Publish ---
-  const handleSaveDraft = useCallback(async () => {
-    if (mode === 'delete_lasso') {
-      return
-    }
-    const persistedDraft = draftToFeatures(mode, draftPoints, activeFeatureType, null, map)
-    const finalFeature = persistedDraft?.features.find(
-      (f) => !f.properties?.isDraftVertex && (f.geometry.type === 'Polygon' || f.geometry.type === 'LineString' || f.geometry.type === 'Point')
-    )
-    if (!project || !finalFeature || !toolsEnabled || !canDrawOnFloor) {
+  const persistDraftChanges = useCallback(async (statusMessage = 'Saving draft...') => {
+    const createdFeatures = [...pendingCreatedFeatures, ...(currentSavableDraftFeature ? [currentSavableDraftFeature] : [])]
+    const updatedFeatures = Object.values(pendingUpdatedFeatures)
+    if (!project || !toolsEnabled || !canDrawOnFloor) {
       if (!canDrawOnFloor) {
         setMessage('Select a floor before saving')
       }
-      return
+      return false
+    }
+    if (createdFeatures.length === 0 && updatedFeatures.length === 0 && pendingDeletedFeatureIds.length === 0) {
+      return true
     }
     setIsSaving(true)
-    setMessage('Saving draft...')
+    setMessage(statusMessage)
     try {
-      const response = await saveDrawingFeature(project.id, {
-        ...finalFeature,
-        properties: {
-          ...(finalFeature.properties ?? {}),
-          featureType: activeFeatureType,
-          tag: '',
-          noteText: '',
-          minZoom: project.boundaryMinZoom,
-          maxZoom: 24,
-          floorId: selectedFloorId ?? null,
-        },
-      })
+      const savedCreated = await Promise.all(
+        createdFeatures.map(async (feature) => {
+          const featureCopy = {
+            ...feature,
+            properties: { ...(feature.properties ?? {}) },
+          }
+          if (String(featureCopy.id ?? '').startsWith('draft-local-')) {
+            delete featureCopy.id
+          }
+          const response = await saveDrawingFeature(project.id, featureCopy)
+          return { localId: featureIdForState(feature), feature: response.feature }
+        }),
+      )
+      const savedUpdated = await Promise.all(
+        updatedFeatures.map(async (feature) => {
+          const response = await saveDrawingFeature(project.id, feature)
+          return response.feature
+        }),
+      )
+      await Promise.all(
+        pendingDeletedFeatureIds.map((featureId) => deleteDrawingFeature(project.id, featureId)),
+      )
       if (!isMountedRef.current) {
         return
       }
-      setVisibleFeatures((current) => [...current, response.feature])
+      setServerFeatures((current) => {
+        const deleted = new Set(pendingDeletedFeatureIds)
+        const updated = new Map(savedUpdated.map((feature) => [featureIdForState(feature), feature]))
+        const next = current
+          .filter((feature) => !deleted.has(featureIdForState(feature)))
+          .map((feature) => updated.get(featureIdForState(feature)) ?? feature)
+        savedCreated.forEach(({ feature }) => {
+          next.push(feature)
+        })
+        return next
+      })
+      const createdIdMap = new Map(savedCreated.map(({ localId, feature }) => [localId, featureIdForState(feature)]))
+      setSelectedFeatureIds((current) =>
+        current
+          .filter((id) => !pendingDeletedFeatureIds.includes(id))
+          .map((id) => createdIdMap.get(id) ?? id),
+      )
+      setPendingCreatedFeatures([])
+      setPendingUpdatedFeatures({})
+      setPendingDeletedFeatureIds([])
       setMessage('Draft feature saved')
       setDraftPoints([])
-      setUserMode('select')
+      setBoxShapeVariant(null)
+      return true
     } catch (error) {
       if (isMountedRef.current) {
         setMessage(error instanceof Error ? error.message : 'Save failed')
       }
+      return false
     } finally {
       if (isMountedRef.current) {
         setIsSaving(false)
@@ -358,45 +531,55 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     }
   }, [
     project,
-    draftPoints,
     toolsEnabled,
-    activeFeatureType,
-    selectedFloorId,
+    pendingCreatedFeatures,
+    pendingDeletedFeatureIds,
+    pendingUpdatedFeatures,
     canDrawOnFloor,
-    mode,
-    map,
+    currentSavableDraftFeature,
+    featureIdForState,
   ])
+
+  const handleSaveDraft = useCallback(async () => {
+    if (mode === 'delete_lasso') {
+      return
+    }
+    const didPersist = await persistDraftChanges()
+    if (didPersist && !hasPendingChanges) {
+      setMessage('Nothing to save')
+    }
+  }, [hasPendingChanges, mode, persistDraftChanges])
 
   const handleDeleteFeatures = useCallback(
     async (featureIds: string[]) => {
-      if (!project || featureIds.length === 0) {
+      if (featureIds.length === 0) {
         return
       }
-      setMessage('Deleting features...')
-      await Promise.all(
-        featureIds.map(async (featureId) => {
-          try {
-            await deleteDrawingFeature(project.id, featureId)
-          } catch (error) {
-            if (isMountedRef.current) {
-              setMessage(error instanceof Error ? error.message : 'Delete failed')
-            }
+      const featureSet = new Set(featureIds)
+      setPendingCreatedFeatures((current) =>
+        current.filter((feature) => !featureSet.has(featureIdForState(feature))),
+      )
+      setPendingUpdatedFeatures((current) => {
+        const next = { ...current }
+        featureIds.forEach((featureId) => {
+          delete next[featureId]
+        })
+        return next
+      })
+      setPendingDeletedFeatureIds((current) => {
+        const next = new Set(current)
+        featureIds.forEach((featureId) => {
+          const existsOnServer = serverFeatures.some((feature) => featureIdForState(feature) === featureId)
+          if (existsOnServer) {
+            next.add(featureId)
           }
-        }),
-      )
-      if (!isMountedRef.current) {
-        return
-      }
-      setVisibleFeatures((current) =>
-        current.filter((feature) => {
-          const id = feature.id ?? feature.properties?.id
-          return !id || !featureIds.includes(String(id))
-        }),
-      )
+        })
+        return Array.from(next)
+      })
       setSelectedFeatureIds((current) => current.filter((id) => !featureIds.includes(id)))
-      setMessage('Delete complete')
+      setMessage('Deletion staged')
     },
-    [project],
+    [featureIdForState, serverFeatures],
   )
 
   const selectedFeatures = useMemo(() => {
@@ -407,35 +590,39 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   const handleMoveFeatures = useCallback((featureIds: string[], deltaLng: number, deltaLat: number) => {
     if (featureIds.length === 0) return
-    setVisibleFeatures((current) => {
-      const next = current.map((feature) => {
-        const id = String(feature.id ?? feature.properties?.id ?? '')
-        if (!featureIds.includes(id)) return feature
-        return translateFeatureGeometry(feature, deltaLng, deltaLat)
-      })
-      visibleFeaturesRef.current = next
-      return next
-    })
-  }, [])
+    if (!project || !map) return
+    const selectedSet = new Set(featureIds)
+    const nextFeatures = visibleFeatures.filter((feature) => selectedSet.has(featureIdForState(feature)))
+    const canMove = nextFeatures.every((feature) =>
+      featureInsideBoundary(translateFeatureGeometry(feature, deltaLng, deltaLat), project, map),
+    )
+    if (!canMove) {
+      setMessage('Move rejected: feature must stay inside the project base boundary')
+      return
+    }
+    applyLocalFeatureUpdate(featureIds, (feature) => translateFeatureGeometry(feature, deltaLng, deltaLat))
+  }, [applyLocalFeatureUpdate, featureIdForState, map, project, visibleFeatures])
 
   const handlePersistMovedFeatures = useCallback(async (featureIds: string[]) => {
-    if (!project || featureIds.length === 0) return
-    const featureSet = new Set(featureIds)
-    const movedFeatures = visibleFeaturesRef.current.filter((feature) =>
-      featureSet.has(String(feature.id ?? feature.properties?.id ?? '')),
+    if (featureIds.length === 0) return
+    setMessage('Move staged in draft')
+  }, [])
+
+  const handleRotateSelected = useCallback((angleDeg: number) => {
+    if (!project || !map || selectedFeatures.length === 0) return
+    const invalidRotation = selectedFeatures.some((feature) =>
+      !featureInsideBoundary(rotateFeatureGeometry(feature, angleDeg), project, map),
     )
-    if (movedFeatures.length === 0) return
-    try {
-      await Promise.all(movedFeatures.map((feature) => saveDrawingFeature(project.id, feature)))
-      if (isMountedRef.current) {
-        setMessage('Feature move saved')
-      }
-    } catch (error) {
-      if (isMountedRef.current) {
-        setMessage(error instanceof Error ? error.message : 'Move save failed')
-      }
+    if (invalidRotation) {
+      setMessage('Rotation rejected: feature must stay inside the project base boundary')
+      return
     }
-  }, [project])
+    applyLocalFeatureUpdate(
+      selectedFeatures.map((feature) => featureIdForState(feature)),
+      (feature) => rotateFeatureGeometry(feature, angleDeg),
+    )
+    setMessage(`Rotation staged (${angleDeg > 0 ? '+' : ''}${angleDeg}deg)`)
+  }, [applyLocalFeatureUpdate, featureIdForState, map, project, selectedFeatures])
 
   const selectedBuildingFeature = useMemo(() => {
     if (!project || selectedFeatures.length !== 1) return null
@@ -464,32 +651,24 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   }, [selectedFeatures])
 
   const handleSaveInspector = useCallback(async () => {
-    if (!project || selectedFeatures.length === 0) return
+    if (selectedFeatures.length === 0) return
     setIsSavingInspector(true)
     setMessage('Saving inspector changes...')
     try {
-      const updates = await Promise.all(
-        selectedFeatures.map(async (feature) => {
-          const next = {
-            ...feature,
-            properties: {
-              ...(feature.properties ?? {}),
-              ...(selectedFeatures.length === 1 ? { name: inspectorDraft.name } : {}),
-              tag: inspectorDraft.tag,
-              noteText: inspectorDraft.noteText,
-              floorId: (feature.properties as Record<string, unknown> | undefined)?.floorId ?? selectedFloorId ?? null,
-            },
-          }
-          const response = await saveDrawingFeature(project.id, next)
-          return response.feature
+      applyLocalFeatureUpdate(
+        selectedFeatures.map((feature) => featureIdForState(feature)),
+        (feature) => ({
+          ...feature,
+          properties: {
+            ...(feature.properties ?? {}),
+            ...(selectedFeatures.length === 1 ? { name: inspectorDraft.name } : {}),
+            tag: inspectorDraft.tag,
+            noteText: inspectorDraft.noteText,
+            floorId: (feature.properties as Record<string, unknown> | undefined)?.floorId ?? selectedFloorId ?? null,
+          },
         }),
       )
-      if (!isMountedRef.current) return
-      setVisibleFeatures((current) => {
-        const byId = new Map(updates.map((feature) => [String(feature.id ?? feature.properties?.id ?? ''), feature]))
-        return current.map((feature) => byId.get(String(feature.id ?? feature.properties?.id ?? '')) ?? feature)
-      })
-      setMessage('Inspector changes saved')
+      setMessage('Inspector changes staged')
     } catch (error) {
       if (isMountedRef.current) {
         setMessage(error instanceof Error ? error.message : 'Save metadata failed')
@@ -499,7 +678,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         setIsSavingInspector(false)
       }
     }
-  }, [inspectorDraft.name, inspectorDraft.noteText, inspectorDraft.tag, project, selectedFeatures, selectedFloorId])
+  }, [applyLocalFeatureUpdate, featureIdForState, inspectorDraft.name, inspectorDraft.noteText, inspectorDraft.tag, selectedFeatures, selectedFloorId])
 
   const handleStartTextBox = useCallback((start: Position, end: Position) => {
     setTextBoxDraft({ start, end, text: '' })
@@ -524,8 +703,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     const p3: Position = [end[0], end[1]]
     const p4: Position = [start[0], end[1]]
     try {
-      const response = await saveDrawingFeature(project.id, {
+      const nextTextFeature = {
         type: 'Feature',
+        id: makeDraftFeatureId(),
         geometry: { type: 'Polygon', coordinates: [[p1, p2, p3, p4, p1]] },
         properties: {
           featureType: 'text_label',
@@ -543,10 +723,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           minZoom: project.boundaryMinZoom,
           maxZoom: 24,
         },
-      } as Feature)
-      if (!isMountedRef.current) return
-      setVisibleFeatures((current) => [...current, response.feature])
-      setMessage('Text added')
+      } as Feature
+      if (!featureInsideBoundary(nextTextFeature, project, map)) {
+        setMessage('Text box rejected: it must stay inside the project base boundary')
+        return
+      }
+      stageCreatedFeature(nextTextFeature, { select: false })
+      setMessage('Text staged in draft')
     } catch (error) {
       if (isMountedRef.current) {
         setMessage(error instanceof Error ? error.message : 'Create text failed')
@@ -557,7 +740,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         setUserMode('select')
       }
     }
-  }, [canDrawOnFloor, project, selectedFloorId, textBoxDraft, toolsEnabled])
+  }, [canDrawOnFloor, makeDraftFeatureId, project, selectedFloorId, stageCreatedFeature, textBoxDraft, toolsEnabled])
 
   const handleCancelTextBox = useCallback(() => {
     setTextBoxDraft(null)
@@ -572,109 +755,17 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     handleStartTextBox(start, end)
   }, [canDrawOnFloor, handleStartTextBox, project, toolsEnabled])
 
-  const handleCommitBoxShape = useCallback(
-    async (shapeMode: 'rectangle' | 'square' | 'triangle' | 'ellipse', start: Position, end: Position) => {
-      if (!project || !toolsEnabled || !canDrawOnFloor) {
-        if (!canDrawOnFloor) setMessage('Select a floor before saving')
-        return
-      }
-      const featureType = featureTypeForMode(shapeMode)
-      const collection = draftToFeatures(shapeMode, [start, end], featureType, null, map)
-      const finalFeature = collection?.features.find(
-        (feature) =>
-          !feature.properties?.isDraftVertex &&
-          (feature.geometry.type === 'Polygon' || feature.geometry.type === 'LineString' || feature.geometry.type === 'Point'),
-      )
-      if (!finalFeature) return
-      setIsSaving(true)
-      setMessage('Saving draft...')
-      try {
-        const response = await saveDrawingFeature(project.id, {
-          ...finalFeature,
-          properties: {
-            ...(finalFeature.properties ?? {}),
-            featureType,
-            tag: '',
-            noteText: '',
-            minZoom: project.boundaryMinZoom,
-            maxZoom: 24,
-            floorId: selectedFloorId ?? null,
-          },
-        })
-        if (!isMountedRef.current) return
-        setVisibleFeatures((current) => [...current, response.feature])
-        setMessage('Draft feature saved')
-        setUserMode('select')
-      } catch (error) {
-        if (isMountedRef.current) {
-          setMessage(error instanceof Error ? error.message : 'Save failed')
-        }
-      } finally {
-        if (isMountedRef.current) {
-          setIsSaving(false)
-        }
-      }
-    },
-    [canDrawOnFloor, project, selectedFloorId, toolsEnabled, map],
-  )
-
-  const handleCommitPenPath = useCallback(
-    async (points: Position[]) => {
-      if (!project || !toolsEnabled || !canDrawOnFloor || points.length < 2) {
-        if (!canDrawOnFloor) setMessage('Select a floor before saving')
-        return
-      }
-      const featureType = featureTypeForMode('pen')
-      const collection = draftToFeatures('pen', points, featureType, null, map)
-      const finalFeature = collection?.features.find(
-        (feature) =>
-          !feature.properties?.isDraftVertex &&
-          (feature.geometry.type === 'Polygon' || feature.geometry.type === 'LineString' || feature.geometry.type === 'Point'),
-      )
-      if (!finalFeature) return
-      setIsSaving(true)
-      setMessage('Saving draft...')
-      try {
-        const response = await saveDrawingFeature(project.id, {
-          ...finalFeature,
-          properties: {
-            ...(finalFeature.properties ?? {}),
-            featureType,
-            tag: '',
-            noteText: '',
-            minZoom: project.boundaryMinZoom,
-            maxZoom: 24,
-            floorId: selectedFloorId ?? null,
-          },
-        })
-        if (!isMountedRef.current) return
-        setVisibleFeatures((current) => [...current, response.feature])
-        setMessage('Draft feature saved')
-        setUserMode('select')
-      } catch (error) {
-        if (isMountedRef.current) {
-          setMessage(error instanceof Error ? error.message : 'Save failed')
-        }
-      } finally {
-        if (isMountedRef.current) {
-          setIsSaving(false)
-        }
-      }
-    },
-    [canDrawOnFloor, project, selectedFloorId, toolsEnabled, map],
-  )
-
-  const handleLassoSelection = useCallback(() => {
-    if (!project || draftPoints.length < 2) {
+  const handleLassoSelection = useCallback((start?: Position, end?: Position) => {
+    const lassoStart = start ?? draftPoints[0]
+    const lassoEnd = end ?? draftPoints[draftPoints.length - 1]
+    if (!project || !lassoStart || !lassoEnd) {
       setMessage('Draw a selection rectangle')
       return
     }
-    const start = draftPoints[0]
-    const end = draftPoints[draftPoints.length - 1]
-    const minLng = Math.min(start[0], end[0])
-    const maxLng = Math.max(start[0], end[0])
-    const minLat = Math.min(start[1], end[1])
-    const maxLat = Math.max(start[1], end[1])
+    const minLng = Math.min(lassoStart[0], lassoEnd[0])
+    const maxLng = Math.max(lassoStart[0], lassoEnd[0])
+    const minLat = Math.min(lassoStart[1], lassoEnd[1])
+    const maxLat = Math.max(lassoStart[1], lassoEnd[1])
 
     const pointInRect = (point: Position) =>
       point[0] >= minLng &&
@@ -710,6 +801,21 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     setUserMode('select')
   }, [draftPoints, project, visibleFeatures])
 
+  const handleFinalizeCurrentDraft = useCallback(() => {
+    if (modeRef.current === 'delete_lasso') {
+      handleLassoSelection()
+      return
+    }
+    if (!currentSavableDraftFeature) {
+      setMessage('Draft shape is invalid or extends outside the project base boundary')
+      return
+    }
+    stageCreatedFeature(currentSavableDraftFeature, { select: false })
+    setDraftPoints([])
+    setBoxShapeVariant(null)
+    setMessage('Shape added to draft')
+  }, [currentSavableDraftFeature, handleLassoSelection, stageCreatedFeature])
+
   useDrawingEngine({
     map,
     project,
@@ -718,22 +824,60 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     modeRef,
     snapPreviewRef,
     selectedFeatureIdsRef,
+    visibleFeaturesRef,
     onAddPoint: setDraftPoints,
-    onSaveDraft: () => {
-      if (modeRef.current === 'delete_lasso') {
-        handleLassoSelection()
-        return
-      }
-      handleSaveDraft()
-    },
+    onSaveDraft: handleFinalizeCurrentDraft,
     onMessage: handleMessage,
     onSetSelection: setSelectedFeatureIds,
     onDeleteFeatures: handleDeleteFeatures,
     onMoveFeatures: handleMoveFeatures,
     onMoveEnd: handlePersistMovedFeatures,
+    onSetBoxShapeVariant: setBoxShapeVariant,
+    onRotateFeatures: (featureIds, angleDeg) => {
+      if (!project || !map || featureIds.length === 0) return
+      const featureSet = new Set(featureIds)
+      const nextFeatures = visibleFeatures.filter((feature) => featureSet.has(featureIdForState(feature)))
+      const invalidRotation = nextFeatures.some((feature) =>
+        !featureInsideBoundary(rotateFeatureGeometry(feature, angleDeg), project, map),
+      )
+      if (invalidRotation) {
+        setMessage('Rotation rejected: feature must stay inside the project base boundary')
+        return
+      }
+      applyLocalFeatureUpdate(featureIds, (feature) => rotateFeatureGeometry(feature, angleDeg))
+    },
     onQuickCreateTextBox: handleQuickCreateTextBox,
-    onCommitBoxShape: handleCommitBoxShape,
-    onCommitPenPath: handleCommitPenPath,
+    onCompleteBoxShape: (shapeMode, start, end) => {
+      const baseMode = shapeMode === 'circle' ? 'ellipse' : shapeMode
+      const nextFeature = buildFinalFeatureFromPoints(
+        baseMode,
+        [start, end],
+        featureTypeForMode(baseMode),
+        shapeMode,
+      )
+      if (!nextFeature) {
+        setDraftPoints([])
+        setBoxShapeVariant(null)
+        setMessage('Shape rejected: it must stay inside the project base boundary')
+        return
+      }
+      stageCreatedFeature(nextFeature, { select: false })
+      setBoxShapeVariant(null)
+      setMessage('Shape added to draft')
+    },
+    onCompletePenPath: (points) => {
+      const nextFeature = buildFinalFeatureFromPoints('pen', points, featureTypeForMode('pen'))
+      if (!nextFeature) {
+        setDraftPoints([])
+        setMessage('Stroke rejected: it must stay inside the project base boundary')
+        return
+      }
+      stageCreatedFeature(nextFeature, { select: false })
+      setMessage('Stroke added to draft')
+    },
+    onCompleteLasso: (start, end) => {
+      handleLassoSelection(start, end)
+    },
   })
 
   useMapRenderer({
@@ -760,7 +904,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     const loadProjectData = async () => {
       if (isMountedRef.current) {
         setProject(null)
-        setVisibleFeatures([])
+        setServerFeatures([])
+        setPendingCreatedFeatures([])
+        setPendingUpdatedFeatures({})
+        setPendingDeletedFeatureIds([])
         setDraftPoints([])
         setUserMode('select')
         setSelectedFeatureIds([])
@@ -800,7 +947,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           setSelectedFloorId(null)
         }
         setProject(loadedProject)
-        setVisibleFeatures([])
+        setServerFeatures([])
+        setPendingCreatedFeatures([])
+        setPendingUpdatedFeatures({})
+        setPendingDeletedFeatureIds([])
         setShowFloorSelector(false)
         if (!shouldCreateDefaultFloor) {
           setMessage('Project data loaded')
@@ -822,7 +972,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   useEffect(() => {
     const handleModeShortcuts = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
-      if ((event.target as HTMLElement | null)?.tagName === 'INPUT' || (event.target as HTMLElement | null)?.tagName === 'TEXTAREA') {
+      if (event.isComposing || event.key === 'Process' || isEditableEventTarget(event.target)) {
         return
       }
       if (key === 'v') {
@@ -861,13 +1011,19 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       } else if (key === '-' || key === '_') {
         event.preventDefault()
         handleZoomOut()
+      } else if (key === 'q' && selectedFeatureIdsRef.current.length > 0) {
+        event.preventDefault()
+        handleRotateSelected(-15)
+      } else if (key === 'e' && selectedFeatureIdsRef.current.length > 0) {
+        event.preventDefault()
+        handleRotateSelected(15)
       }
     }
     window.addEventListener('keydown', handleModeShortcuts)
     return () => {
       window.removeEventListener('keydown', handleModeShortcuts)
     }
-  }, [handleSetMode, handleZoomIn, handleZoomOut])
+  }, [handleRotateSelected, handleSetMode, handleZoomIn, handleZoomOut])
 
   // --- Visible feature loading ---
   useEffect(() => {
@@ -896,11 +1052,14 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         if (!isMountedRef.current || abortController.signal.aborted) {
           return
         }
-        setVisibleFeatures(nextFeatures)
+        setServerFeatures(nextFeatures)
         const visibleIds = new Set(
-          nextFeatures
-            .map((feature) => String(feature.id ?? feature.properties?.id ?? ''))
-            .filter(Boolean),
+          [
+            ...nextFeatures.map((feature) => featureIdForState(feature)),
+            ...pendingCreatedFeatures.map((feature) => featureIdForState(feature)),
+            ...Object.keys(pendingUpdatedFeatures),
+          ]
+            .filter((id) => !pendingDeletedFeatureIds.includes(id)),
         )
         setSelectedFeatureIds((current) => current.filter((id) => visibleIds.has(id)))
       } catch (error) {
@@ -918,7 +1077,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       }
       visibleFeaturesRequestRef.current?.abort()
     }
-  }, [mapZoom, project, map, mapReady, selectedFloorId])
+  }, [featureIdForState, mapZoom, pendingCreatedFeatures, pendingDeletedFeatureIds, pendingUpdatedFeatures, project, map, mapReady, selectedFloorId])
 
   // Ensure we always auto-focus boundary when entering/opening a project.
   useEffect(() => {
@@ -947,6 +1106,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     if (!project) {
       return
     }
+    if (hasPendingChanges) {
+      const didPersist = await persistDraftChanges('Saving draft before publish...')
+      if (!didPersist) {
+        return
+      }
+    }
     setIsSaving(true)
     setMessage('Publishing project...')
     try {
@@ -955,7 +1120,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         return
       }
       setProject(response.project)
-      setVisibleFeatures(response.project.features)
+      setServerFeatures(response.project.features)
+      setPendingCreatedFeatures([])
+      setPendingUpdatedFeatures({})
+      setPendingDeletedFeatureIds([])
       setMessage('Project published')
     } catch (error) {
       if (isMountedRef.current) {
@@ -1102,7 +1270,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   }, [project?.name, projectStack])
 
   return (
-    <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-950 text-slate-100">
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-100 text-slate-950">
       <EditorStructurePanel
         project={project}
         floors={floors}
@@ -1120,15 +1288,27 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         isUpdatingFloor={isUpdatingFloor}
       />
 
-      <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-900">
+      <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-200">
         <div
           ref={containerRef}
           className="absolute inset-0 h-full w-full"
           aria-label="Spatial editor map"
         />
+        <button
+          type="button"
+          className="absolute left-4 top-4 z-30 inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-sm font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900"
+          onClick={onBack}
+          aria-label="Back to main map"
+        >
+          <ArrowLeft className="size-4" aria-hidden="true" />
+          <span>Main map</span>
+        </button>
         <SpatialCanvasOverlay
           map={map}
+          draftMode={mode}
           visibleFeatures={visibleFeatures}
+          publishedFeatures={project?.publishedFeatures ?? []}
+          localDraftFeatureIds={localDraftFeatureIds}
           selectedFeatureIds={selectedFeatureIds}
           draftCollection={draftCollection}
           snapPreview={snapPreview}
@@ -1154,7 +1334,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         <EditorToolbar
           toolsEnabled={toolsEnabled}
           isSaving={isSaving}
-          draftFeature={draftCollection}
+          hasPendingChanges={
+            pendingCreatedFeatures.length > 0 ||
+            Object.keys(pendingUpdatedFeatures).length > 0 ||
+            pendingDeletedFeatureIds.length > 0
+          }
+          hasSavableDraft={Boolean(currentSavableDraftFeature)}
           project={project}
           canDrawOnFloor={canDrawOnFloor}
           onSetMode={handleSetMode}
@@ -1169,7 +1354,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         {canShowFloorSelector ? (
           <button
             type="button"
-            className="absolute right-4 top-4 z-30 rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-1.5 text-xs font-semibold text-slate-100 shadow-lg"
+            className="absolute right-4 top-4 z-30 rounded-lg border border-slate-300 bg-white/95 px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
             onClick={() => setShowFloorSelector((value) => !value)}
           >
             Floors
@@ -1196,7 +1381,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           />
         ) : null}
         {breadcrumb && breadcrumb.length > 1 ? (
-          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-lg border border-white/30 bg-white/92 px-3 py-1.5 text-sm shadow-lg backdrop-blur">
+          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 px-3 py-1.5 text-sm shadow-lg backdrop-blur">
             <button
               type="button"
               className="text-sky-600 hover:text-sky-800 hover:underline"
@@ -1205,14 +1390,14 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               ← {projectStack[projectStack.length - 1]?.name}
             </button>
             <span className="text-slate-400">/</span>
-            <span className="font-medium text-slate-950">{project?.name}</span>
+            <span className="font-medium text-slate-900">{project?.name}</span>
           </div>
         ) : null}
       </main>
 
-      <EditorSidebar
-        project={project}
-        projectConfig={projectConfig}
+        <EditorSidebar
+          project={project}
+          projectConfig={projectConfig}
         floors={floors}
         selectedFloorId={selectedFloorId}
         mapZoom={mapZoom}
@@ -1224,11 +1409,11 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         snapPreview={snapPreview}
         message={message}
         selectedFeatures={selectedFeatures}
-        inspectorDraft={inspectorDraft}
-        onInspectorDraftChange={setInspectorDraft}
-        onSaveInspector={handleSaveInspector}
-        isSavingInspector={isSavingInspector}
-      />
+          inspectorDraft={inspectorDraft}
+          onInspectorDraftChange={setInspectorDraft}
+          onSaveInspector={handleSaveInspector}
+          isSavingInspector={isSavingInspector}
+        />
     </div>
   )
 }
