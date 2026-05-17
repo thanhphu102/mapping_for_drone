@@ -572,98 +572,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     handleStartTextBox(start, end)
   }, [canDrawOnFloor, handleStartTextBox, project, toolsEnabled])
 
-  const handleCommitBoxShape = useCallback(
-    async (shapeMode: 'rectangle' | 'square' | 'triangle' | 'ellipse', start: Position, end: Position) => {
-      if (!project || !toolsEnabled || !canDrawOnFloor) {
-        if (!canDrawOnFloor) setMessage('Select a floor before saving')
-        return
-      }
-      const featureType = featureTypeForMode(shapeMode)
-      const collection = draftToFeatures(shapeMode, [start, end], featureType, null, map)
-      const finalFeature = collection?.features.find(
-        (feature) =>
-          !feature.properties?.isDraftVertex &&
-          (feature.geometry.type === 'Polygon' || feature.geometry.type === 'LineString' || feature.geometry.type === 'Point'),
-      )
-      if (!finalFeature) return
-      setIsSaving(true)
-      setMessage('Saving draft...')
-      try {
-        const response = await saveDrawingFeature(project.id, {
-          ...finalFeature,
-          properties: {
-            ...(finalFeature.properties ?? {}),
-            featureType,
-            tag: '',
-            noteText: '',
-            minZoom: project.boundaryMinZoom,
-            maxZoom: 24,
-            floorId: selectedFloorId ?? null,
-          },
-        })
-        if (!isMountedRef.current) return
-        setVisibleFeatures((current) => [...current, response.feature])
-        setMessage('Draft feature saved')
-        setUserMode('select')
-      } catch (error) {
-        if (isMountedRef.current) {
-          setMessage(error instanceof Error ? error.message : 'Save failed')
-        }
-      } finally {
-        if (isMountedRef.current) {
-          setIsSaving(false)
-        }
-      }
-    },
-    [canDrawOnFloor, project, selectedFloorId, toolsEnabled, map],
-  )
-
-  const handleCommitPenPath = useCallback(
-    async (points: Position[]) => {
-      if (!project || !toolsEnabled || !canDrawOnFloor || points.length < 2) {
-        if (!canDrawOnFloor) setMessage('Select a floor before saving')
-        return
-      }
-      const featureType = featureTypeForMode('pen')
-      const collection = draftToFeatures('pen', points, featureType, null, map)
-      const finalFeature = collection?.features.find(
-        (feature) =>
-          !feature.properties?.isDraftVertex &&
-          (feature.geometry.type === 'Polygon' || feature.geometry.type === 'LineString' || feature.geometry.type === 'Point'),
-      )
-      if (!finalFeature) return
-      setIsSaving(true)
-      setMessage('Saving draft...')
-      try {
-        const response = await saveDrawingFeature(project.id, {
-          ...finalFeature,
-          properties: {
-            ...(finalFeature.properties ?? {}),
-            featureType,
-            tag: '',
-            noteText: '',
-            minZoom: project.boundaryMinZoom,
-            maxZoom: 24,
-            floorId: selectedFloorId ?? null,
-          },
-        })
-        if (!isMountedRef.current) return
-        setVisibleFeatures((current) => [...current, response.feature])
-        setMessage('Draft feature saved')
-        setUserMode('select')
-      } catch (error) {
-        if (isMountedRef.current) {
-          setMessage(error instanceof Error ? error.message : 'Save failed')
-        }
-      } finally {
-        if (isMountedRef.current) {
-          setIsSaving(false)
-        }
-      }
-    },
-    [canDrawOnFloor, project, selectedFloorId, toolsEnabled, map],
-  )
-
   const handleLassoSelection = useCallback(() => {
     if (!project || draftPoints.length < 2) {
       setMessage('Draw a selection rectangle')
@@ -732,8 +640,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onMoveFeatures: handleMoveFeatures,
     onMoveEnd: handlePersistMovedFeatures,
     onQuickCreateTextBox: handleQuickCreateTextBox,
-    onCommitBoxShape: handleCommitBoxShape,
-    onCommitPenPath: handleCommitPenPath,
   })
 
   useMapRenderer({
@@ -1128,6 +1034,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         />
         <SpatialCanvasOverlay
           map={map}
+          projectStatus={project?.status}
+          draftMode={mode}
           visibleFeatures={visibleFeatures}
           selectedFeatureIds={selectedFeatureIds}
           draftCollection={draftCollection}

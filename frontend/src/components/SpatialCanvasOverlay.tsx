@@ -5,6 +5,8 @@ import type { SnapPreview } from '../hooks/useSnapEngine'
 
 interface SpatialCanvasOverlayProps {
   map: Map | null
+  projectStatus?: 'draft' | 'published' | 'archived'
+  draftMode?: string | null
   visibleFeatures: Feature[]
   selectedFeatureIds: string[]
   draftCollection: FeatureCollection | null
@@ -125,12 +127,18 @@ function drawFeature(
   map: Map,
   feature: Feature,
   selected: boolean,
+  published: boolean,
+  lassoDraft: boolean,
   draft = false,
 ) {
   const geometry = feature.geometry as Geometry | null
   if (!geometry) return
-  const fill = draft ? 'rgba(249,115,22,0.16)' : 'rgba(34,197,94,0.22)'
-  const stroke = selected ? '#38bdf8' : draft ? '#f97316' : '#15803d'
+  const savedFill = published ? 'rgba(168,85,247,0.20)' : 'rgba(34,197,94,0.18)'
+  const savedStroke = published ? '#7e22ce' : '#15803d'
+  const draftFill = lassoDraft ? 'rgba(59,130,246,0.12)' : 'rgba(34,197,94,0.18)'
+  const draftStroke = lassoDraft ? '#2563eb' : '#15803d'
+  const fill = draft ? draftFill : savedFill
+  const stroke = selected ? '#38bdf8' : draft ? draftStroke : savedStroke
   const lineWidth = selected ? 3 : draft ? 2.5 : 2
 
   if (isTextFeature(feature)) {
@@ -161,7 +169,7 @@ function drawFeature(
     const point = projectPoint(map, geometry.coordinates as Position)
     ctx.beginPath()
     ctx.arc(point.x, point.y, selected ? 7 : 5, 0, Math.PI * 2)
-    ctx.fillStyle = draft ? '#f97316' : '#15803d'
+    ctx.fillStyle = draft ? draftStroke : savedStroke
     ctx.strokeStyle = '#ffffff'
     ctx.lineWidth = 2
     ctx.fill()
@@ -172,7 +180,7 @@ function drawFeature(
       ctx.beginPath()
       ctx.arc(point.x, point.y, 4, 0, Math.PI * 2)
       ctx.fillStyle = '#ffffff'
-      ctx.strokeStyle = '#f97316'
+      ctx.strokeStyle = draft ? draftStroke : savedStroke
       ctx.lineWidth = 2
       ctx.fill()
       ctx.stroke()
@@ -182,6 +190,8 @@ function drawFeature(
 
 export function SpatialCanvasOverlay({
   map,
+  projectStatus = 'draft',
+  draftMode = null,
   visibleFeatures,
   selectedFeatureIds,
   draftCollection,
@@ -198,6 +208,8 @@ export function SpatialCanvasOverlay({
 
     let frame = 0
     const selectedSet = new Set(selectedFeatureIds)
+    const published = projectStatus === 'published'
+    const lassoDraft = draftMode === 'delete_lasso'
 
     const render = () => {
       const rect = canvas.getBoundingClientRect()
@@ -212,11 +224,11 @@ export function SpatialCanvasOverlay({
       ctx.clearRect(0, 0, rect.width, rect.height)
 
       visibleFeatures.forEach((feature) => {
-        drawFeature(ctx, map, feature, selectedSet.has(featureId(feature)))
+        drawFeature(ctx, map, feature, selectedSet.has(featureId(feature)), published, false)
       })
 
       draftCollection?.features.forEach((feature) => {
-        drawFeature(ctx, map, feature as Feature, false, true)
+        drawFeature(ctx, map, feature as Feature, false, published, lassoDraft, true)
       })
 
       if (snapPreview) {
@@ -250,7 +262,7 @@ export function SpatialCanvasOverlay({
       map.off('zoom', schedule)
       map.off('resize', schedule)
     }
-  }, [draftCollection, map, selectedFeatureIds, snapPreview, visibleFeatures])
+  }, [draftCollection, draftMode, map, projectStatus, selectedFeatureIds, snapPreview, visibleFeatures])
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" />
 }

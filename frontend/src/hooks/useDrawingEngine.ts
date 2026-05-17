@@ -39,10 +39,48 @@ function pointInRing(point: Position, ring: Position[]) {
   return inside
 }
 
-function pointInBoundary(point: Position, project: DrawingProject) {
+function pointOnSegment(map: Map, point: Position, start: Position, end: Position, tolerancePx = 6) {
+  const projectedPoint = map.project({ lng: point[0], lat: point[1] })
+  const projectedStart = map.project({ lng: start[0], lat: start[1] })
+  const projectedEnd = map.project({ lng: end[0], lat: end[1] })
+  const dx = projectedEnd.x - projectedStart.x
+  const dy = projectedEnd.y - projectedStart.y
+  const lengthSquared = dx * dx + dy * dy
+  if (lengthSquared <= 1e-9) {
+    return Math.hypot(projectedPoint.x - projectedStart.x, projectedPoint.y - projectedStart.y) <= tolerancePx
+  }
+
+  const t =
+    ((projectedPoint.x - projectedStart.x) * dx + (projectedPoint.y - projectedStart.y) * dy) / lengthSquared
+  if (t < 0 || t > 1) {
+    return false
+  }
+
+  const nearestX = projectedStart.x + t * dx
+  const nearestY = projectedStart.y + t * dy
+  return Math.hypot(projectedPoint.x - nearestX, projectedPoint.y - nearestY) <= tolerancePx
+}
+
+function pointOnRing(map: Map, point: Position, ring: Position[]) {
+  for (let index = 1; index < ring.length; index += 1) {
+    if (pointOnSegment(map, point, ring[index - 1], ring[index])) {
+      return true
+    }
+  }
+  return false
+}
+
+function pointInBoundary(point: Position, project: DrawingProject, map: Map | null) {
+  if (!map) {
+    return false
+  }
   return project.baseGeometry.coordinates.some((polygon) => {
     const [outer, ...holes] = polygon
-    return pointInRing(point, outer) && !holes.some((hole) => pointInRing(point, hole))
+    const insideOuter = pointInRing(point, outer) || pointOnRing(map, point, outer)
+    if (!insideOuter) {
+      return false
+    }
+    return !holes.some((hole) => pointInRing(point, hole) || pointOnRing(map, point, hole))
   })
 }
 
@@ -116,8 +154,6 @@ interface UseDrawingEngineOptions {
   onMoveFeatures?: (featureIds: string[], deltaLng: number, deltaLat: number) => void
   onMoveEnd?: (featureIds: string[]) => void
   onQuickCreateTextBox?: (start: Position, end: Position) => void
-  onCommitBoxShape?: (mode: 'rectangle' | 'square' | 'triangle' | 'ellipse', start: Position, end: Position) => void
-  onCommitPenPath?: (points: Position[]) => void
 }
 
 export function useDrawingEngine({
@@ -136,8 +172,6 @@ export function useDrawingEngine({
   onMoveFeatures,
   onMoveEnd,
   onQuickCreateTextBox,
-  onCommitBoxShape,
-  onCommitPenPath,
 }: UseDrawingEngineOptions) {
   const projectRef = useRef(project)
   const toolsEnabledRef = useRef(toolsEnabled)
@@ -210,7 +244,7 @@ export function useDrawingEngine({
         const draftMode = modeRef.current
         if (!currentProject || draftMode === 'select' || draftMode === 'move') return current
         const point: Position = snapPreviewRef.current?.point ?? [event.lngLat.lng, event.lngLat.lat]
-        if (!pointInBoundary(point, currentProject)) {
+        if (!pointInBoundary(point, currentProject, map)) {
           if (isMounted()) onMessage('Point rejected: it is outside the locked base boundary')
           return current
         }
@@ -388,10 +422,6 @@ export function useDrawingEngine({
             onQuickCreateTextBox?.(start, end)
             onAddPoint(() => [])
           } else if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse') {
-            onCommitBoxShape?.(mode, start, end)
-            onAddPoint(() => [])
-          } else {
-            onSaveDraftRef.current()
           }
         } else {
           onAddPoint(() => [])
@@ -404,10 +434,6 @@ export function useDrawingEngine({
         map.dragPan.disable()
         suppressClickRef.current = true
         if (freehandPoints.length >= 2) {
-          onCommitPenPath?.(freehandPoints)
-          onAddPoint(() => [])
-        } else {
-          onSaveDraftRef.current()
         }
         freehandPoints = []
       }
@@ -479,7 +505,7 @@ export function useDrawingEngine({
       map.off('dblclick', handleDblClick)
       map.doubleClickZoom.enable()
     }
-  }, [map, handleMapClick, onAddPoint, snapPreviewRef, modeRef, onDeleteFeatures, onSetSelection, selectedFeatureIdsRef, onMoveFeatures, onMoveEnd, onQuickCreateTextBox, onCommitBoxShape, onCommitPenPath, constrainSquareByPixels])
+  }, [map, handleMapClick, onAddPoint, snapPreviewRef, modeRef, onDeleteFeatures, onSetSelection, selectedFeatureIdsRef, onMoveFeatures, onMoveEnd, onQuickCreateTextBox, constrainSquareByPixels])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -586,7 +612,7 @@ export function draftToFeatures(
   const previewPoints = [...points]
   if (
     hoverCoordinate &&
-    !['point', 'door', 'rectangle', 'square', 'triangle', 'ellipse', 'text', 'delete_lasso'].includes(mode)
+    !['point', 'door', 'rectangle', 'square', 'triangle', 'ellipse', 'text', 'delete_lasso', 'pen'].includes(mode)
   ) {
     previewPoints.push(hoverCoordinate)
   }
