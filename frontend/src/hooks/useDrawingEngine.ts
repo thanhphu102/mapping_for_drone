@@ -25,6 +25,8 @@ export type DrawMode =
   | 'indoor_route'
   | 'delete_lasso'
 
+export type BoxShapeVariant = 'rectangle' | 'square' | 'triangle' | 'ellipse' | 'circle' | 'text'
+
 function pointInRing(point: Position, ring: Position[]) {
   const [x, y] = point
   let inside = false
@@ -156,6 +158,89 @@ function translatePosition([lng, lat]: Position, deltaLng: number, deltaLat: num
   return [lng + deltaLng, lat + deltaLat]
 }
 
+function buildCircleRing(start: Position, end: Position, map: Map | null): Position[] {
+  const segments = 40
+  const ring: Position[] = []
+  if (map) {
+    const startPx = map.project([start[0], start[1]])
+    const endPx = map.project([end[0], end[1]])
+    const centerPxX = (startPx.x + endPx.x) / 2
+    const centerPxY = (startPx.y + endPx.y) / 2
+    const radiusPx = Math.max(1, Math.hypot(endPx.x - startPx.x, endPx.y - startPx.y) / 2)
+    for (let i = 0; i <= segments; i += 1) {
+      const angle = (i / segments) * Math.PI * 2
+      const pxX = centerPxX + Math.cos(angle) * radiusPx
+      const pxY = centerPxY + Math.sin(angle) * radiusPx
+      const lngLat = map.unproject([pxX, pxY])
+      ring.push([lngLat.lng, lngLat.lat])
+    }
+    return ring
+  }
+
+  const center: Position = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]
+  const radius = Math.max(Math.abs(end[0] - start[0]), Math.abs(end[1] - start[1])) / 2
+  for (let i = 0; i <= segments; i += 1) {
+    const angle = (i / segments) * Math.PI * 2
+    ring.push([
+      center[0] + Math.cos(angle) * radius,
+      center[1] + Math.sin(angle) * radius,
+    ])
+  }
+  return ring
+}
+
+function buildSquareRing(start: Position, end: Position, map: Map | null): Position[] {
+  if (!map) {
+    const lngDelta = end[0] - start[0]
+    const latDelta = end[1] - start[1]
+    const horizontalDominant = Math.abs(lngDelta) >= Math.abs(latDelta)
+    const side = horizontalDominant ? Math.abs(lngDelta) : Math.abs(latDelta)
+    if (horizontalDominant) {
+      const verticalSign = Math.sign(latDelta || 1)
+      const p1: Position = [start[0], start[1]]
+      const p2: Position = [start[0] + Math.sign(lngDelta || 1) * side, start[1]]
+      const p3: Position = [p2[0], p2[1] + verticalSign * side]
+      const p4: Position = [p1[0], p1[1] + verticalSign * side]
+      return [p1, p2, p3, p4, p1]
+    }
+    const horizontalSign = Math.sign(lngDelta || 1)
+    const p1: Position = [start[0], start[1]]
+    const p2: Position = [start[0], start[1] + Math.sign(latDelta || 1) * side]
+    const p3: Position = [p2[0] + horizontalSign * side, p2[1]]
+    const p4: Position = [p1[0] + horizontalSign * side, p1[1]]
+    return [p1, p2, p3, p4, p1]
+  }
+
+  const startPx = map.project([start[0], start[1]])
+  const endPx = map.project([end[0], end[1]])
+  const dx = endPx.x - startPx.x
+  const dy = endPx.y - startPx.y
+  const horizontalDominant = Math.abs(dx) >= Math.abs(dy)
+  const side = horizontalDominant ? Math.abs(dx) : Math.abs(dy)
+
+  const p1 = { x: startPx.x, y: startPx.y }
+  let p2: { x: number; y: number }
+  let p3: { x: number; y: number }
+  let p4: { x: number; y: number }
+
+  if (horizontalDominant) {
+    const verticalSign = Math.sign(dy || 1)
+    p2 = { x: startPx.x + Math.sign(dx || 1) * side, y: startPx.y }
+    p3 = { x: p2.x, y: p2.y + verticalSign * side }
+    p4 = { x: p1.x, y: p1.y + verticalSign * side }
+  } else {
+    const horizontalSign = Math.sign(dx || 1)
+    p2 = { x: startPx.x, y: startPx.y + Math.sign(dy || 1) * side }
+    p3 = { x: p2.x + horizontalSign * side, y: p2.y }
+    p4 = { x: p1.x + horizontalSign * side, y: p1.y }
+  }
+
+  return [p1, p2, p3, p4, p1].map((point) => {
+    const lngLat = map.unproject([point.x, point.y])
+    return [lngLat.lng, lngLat.lat] as Position
+  })
+}
+
 function geometryCentroid(geometry: Geometry): Position | null {
   const positions = geometryPositions(geometry)
   if (positions.length === 0) {
@@ -250,8 +335,9 @@ interface UseDrawingEngineOptions {
   onMoveFeatures?: (featureIds: string[], deltaLng: number, deltaLat: number) => void
   onMoveEnd?: (featureIds: string[]) => void
   onRotateFeatures?: (featureIds: string[], angleDeg: number) => void
+  onSetBoxShapeVariant?: (variant: BoxShapeVariant | null) => void
   onQuickCreateTextBox?: (start: Position, end: Position) => void
-  onCompleteBoxShape?: (mode: 'rectangle' | 'square' | 'triangle' | 'ellipse', start: Position, end: Position) => void
+  onCompleteBoxShape?: (mode: 'rectangle' | 'square' | 'triangle' | 'ellipse' | 'circle', start: Position, end: Position) => void
   onCompletePenPath?: (points: Position[]) => void
   onCompleteLasso?: (start: Position, end: Position) => void
 }
@@ -273,6 +359,7 @@ export function useDrawingEngine({
   onMoveFeatures,
   onMoveEnd,
   onRotateFeatures,
+  onSetBoxShapeVariant,
   onQuickCreateTextBox,
   onCompleteBoxShape,
   onCompletePenPath,
@@ -286,6 +373,7 @@ export function useDrawingEngine({
   const onMoveFeaturesRef = useRef(onMoveFeatures)
   const onMoveEndRef = useRef(onMoveEnd)
   const onRotateFeaturesRef = useRef(onRotateFeatures)
+  const onSetBoxShapeVariantRef = useRef(onSetBoxShapeVariant)
   const onQuickCreateTextBoxRef = useRef(onQuickCreateTextBox)
   const onCompleteBoxShapeRef = useRef(onCompleteBoxShape)
   const onCompletePenPathRef = useRef(onCompletePenPath)
@@ -294,6 +382,9 @@ export function useDrawingEngine({
   const movingFeaturesRef = useRef<{ featureIds: string[]; lastLng: number; lastLat: number; moved: boolean } | null>(null)
   const rotatingFeaturesRef = useRef<{ featureIds: string[]; centerX: number; centerY: number; lastAngle: number; rotated: boolean } | null>(null)
   const boxShapeStartRef = useRef<Position | null>(null)
+  const squareAxisRef = useRef<'horizontal' | 'vertical' | null>(null)
+  const squareNormalSignRef = useRef<1 | -1 | null>(null)
+  const circleAxisRef = useRef<'horizontal' | 'vertical' | null>(null)
   const freehandStartedRef = useRef(false)
   const freehandPointsRef = useRef<Position[]>([])
   const lassoStartedRef = useRef(false)
@@ -330,6 +421,10 @@ export function useDrawingEngine({
   useEffect(() => {
     onRotateFeaturesRef.current = onRotateFeatures
   }, [onRotateFeatures])
+
+  useEffect(() => {
+    onSetBoxShapeVariantRef.current = onSetBoxShapeVariant
+  }, [onSetBoxShapeVariant])
 
   useEffect(() => {
     onQuickCreateTextBoxRef.current = onQuickCreateTextBox
@@ -407,20 +502,85 @@ export function useDrawingEngine({
     }
   }, [map])
 
-  const constrainSquareByPixels = useCallback((start: Position, rawEnd: Position): Position => {
+  const normalizeSquareDrag = useCallback((start: Position, rawEnd: Position): Position => {
     if (!map) return rawEnd
     const startPx = map.project([start[0], start[1]])
     const endPx = map.project([rawEnd[0], rawEnd[1]])
     const dx = endPx.x - startPx.x
     const dy = endPx.y - startPx.y
-    const side = Math.min(Math.abs(dx), Math.abs(dy))
-    const constrainedPx = {
-      x: startPx.x + Math.sign(dx || 1) * side,
+    const movementThreshold = 4
+
+    let axis = squareAxisRef.current
+    if (!axis && (Math.abs(dx) >= movementThreshold || Math.abs(dy) >= movementThreshold)) {
+      axis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical'
+      squareAxisRef.current = axis
+    }
+    if (!axis) {
+      axis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical'
+    }
+
+    let normalSign = squareNormalSignRef.current
+    if (axis === 'horizontal') {
+      if (!normalSign && Math.abs(dy) >= movementThreshold) {
+        normalSign = Math.sign(dy) === -1 ? -1 : 1
+        squareNormalSignRef.current = normalSign
+      }
+      normalSign = normalSign ?? 1
+      const side = Math.abs(dx)
+      const normalizedPx = {
+        x: startPx.x + Math.sign(dx || 1) * side,
+        y: startPx.y + normalSign * side,
+      }
+      const unprojected = map.unproject([normalizedPx.x, normalizedPx.y])
+      return [unprojected.lng, unprojected.lat]
+    }
+
+    if (!normalSign && Math.abs(dx) >= movementThreshold) {
+      normalSign = Math.sign(dx) === -1 ? -1 : 1
+      squareNormalSignRef.current = normalSign
+    }
+    normalSign = normalSign ?? 1
+    const side = Math.abs(dy)
+    const normalizedPx = {
+      x: startPx.x + normalSign * side,
       y: startPx.y + Math.sign(dy || 1) * side,
     }
-    const unprojected = map.unproject([constrainedPx.x, constrainedPx.y])
+    const unprojected = map.unproject([normalizedPx.x, normalizedPx.y])
     return [unprojected.lng, unprojected.lat]
   }, [map])
+
+  const normalizeCircleDrag = useCallback((start: Position, rawEnd: Position): Position => {
+    if (!map) return rawEnd
+    const startPx = map.project([start[0], start[1]])
+    const endPx = map.project([rawEnd[0], rawEnd[1]])
+    const dx = endPx.x - startPx.x
+    const dy = endPx.y - startPx.y
+    const movementThreshold = 4
+
+    let axis = circleAxisRef.current
+    if (!axis && (Math.abs(dx) >= movementThreshold || Math.abs(dy) >= movementThreshold)) {
+      axis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical'
+      circleAxisRef.current = axis
+    }
+    if (!axis) {
+      axis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical'
+    }
+
+    const normalizedPx =
+      axis === 'horizontal'
+        ? { x: startPx.x + Math.sign(dx || 1) * Math.abs(dx), y: startPx.y }
+        : { x: startPx.x, y: startPx.y + Math.sign(dy || 1) * Math.abs(dy) }
+
+    const unprojected = map.unproject([normalizedPx.x, normalizedPx.y])
+    return [unprojected.lng, unprojected.lat]
+  }, [map])
+
+  const resolveBoxShapeVariant = useCallback((mode: DrawMode, shiftPressed: boolean): BoxShapeVariant | null => {
+    if (mode === 'rectangle') return shiftPressed ? 'square' : 'rectangle'
+    if (mode === 'ellipse') return shiftPressed ? 'circle' : 'ellipse'
+    if (mode === 'triangle' || mode === 'text' || mode === 'square') return mode
+    return null
+  }, [])
 
   const handleMapClick = useCallback(
     (event: MapMouseEvent) => {
@@ -490,6 +650,14 @@ export function useDrawingEngine({
         if (e.originalEvent.button !== 0) return
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
         boxShapeStartRef.current = start
+        if (mode === 'square' || mode === 'rectangle') {
+          squareAxisRef.current = null
+          squareNormalSignRef.current = null
+        }
+        if (mode === 'ellipse') {
+          circleAxisRef.current = null
+        }
+        onSetBoxShapeVariantRef.current?.(resolveBoxShapeVariant(mode, Boolean(e.originalEvent?.shiftKey)))
         onAddPoint(() => [start, start])
         map.dragPan.disable()
         setCursor('crosshair')
@@ -593,10 +761,14 @@ export function useDrawingEngine({
         const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
         const mode = modeRef.current
         const shiftPressed = Boolean(e.originalEvent?.shiftKey)
+        const variant = resolveBoxShapeVariant(mode, shiftPressed)
+        onSetBoxShapeVariantRef.current?.(variant)
         const end: Position =
-          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shiftPressed
-            ? constrainSquareByPixels(boxShapeStartRef.current, rawEnd)
-            : rawEnd
+          variant === 'square'
+            ? normalizeSquareDrag(boxShapeStartRef.current, rawEnd)
+            : variant === 'circle'
+              ? normalizeCircleDrag(boxShapeStartRef.current, rawEnd)
+              : rawEnd
         onAddPoint(() => [boxShapeStartRef.current!, end])
         return
       }
@@ -675,18 +847,25 @@ export function useDrawingEngine({
         const rawEnd: Position = [e.lngLat.lng, e.lngLat.lat]
         const mode = modeRef.current
         const shiftPressed = Boolean(e.originalEvent?.shiftKey)
+        const variant = resolveBoxShapeVariant(mode, shiftPressed)
         const end: Position =
-          (mode === 'rectangle' || mode === 'ellipse' || mode === 'text') && shiftPressed
-            ? constrainSquareByPixels(start, rawEnd)
-            : rawEnd
+          variant === 'square'
+            ? normalizeSquareDrag(start, rawEnd)
+            : variant === 'circle'
+              ? normalizeCircleDrag(start, rawEnd)
+              : rawEnd
+        squareAxisRef.current = null
+        squareNormalSignRef.current = null
+        circleAxisRef.current = null
+        onSetBoxShapeVariantRef.current?.(null)
         const d = Math.hypot(end[0] - start[0], end[1] - start[1])
         if (d > 0.000001) {
           onAddPoint(() => [start, end])
           if (mode === 'text') {
             onQuickCreateTextBoxRef.current?.(start, end)
             onAddPoint(() => [])
-          } else if (mode === 'rectangle' || mode === 'square' || mode === 'triangle' || mode === 'ellipse') {
-            onCompleteBoxShapeRef.current?.(mode, start, end)
+          } else if (variant === 'rectangle' || variant === 'square' || variant === 'triangle' || variant === 'ellipse' || variant === 'circle') {
+            onCompleteBoxShapeRef.current?.(variant, start, end)
             onAddPoint(() => [])
           }
         } else {
@@ -775,7 +954,7 @@ export function useDrawingEngine({
       map.off('dblclick', handleDblClick)
       map.doubleClickZoom.enable()
     }
-  }, [map, handleMapClick, hitTestFeatureAtPoint, onAddPoint, modeRef, selectedFeatureIdsRef, constrainSquareByPixels, getRotateHandle, getSelectedFeatureById])
+  }, [map, handleMapClick, hitTestFeatureAtPoint, onAddPoint, modeRef, selectedFeatureIdsRef, getRotateHandle, getSelectedFeatureById, normalizeCircleDrag, normalizeSquareDrag, resolveBoxShapeVariant])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -789,6 +968,7 @@ export function useDrawingEngine({
 
       if (e.key === 'Escape') {
         e.preventDefault()
+        onSetBoxShapeVariantRef.current?.(null)
         onAddPoint(() => [])
         onSetSelection([])
         return
@@ -869,15 +1049,32 @@ export function draftToFeatures(
   featureType: string,
   hoverCoordinate: Position | null,
   map: Map | null = null,
+  boxShapeVariant: BoxShapeVariant | null = null,
 ): FeatureCollection | null {
   if (points.length === 0) return null
 
   const features: Feature[] = []
-  features.push({
-    type: 'Feature',
-    geometry: { type: 'MultiPoint', coordinates: points },
-    properties: { featureType, isDraftVertex: true },
-  })
+  const effectiveBoxVariant =
+    boxShapeVariant ??
+    (mode === 'square'
+      ? 'square'
+      : mode === 'rectangle'
+        ? 'rectangle'
+        : mode === 'ellipse'
+          ? 'ellipse'
+          : mode === 'triangle'
+            ? 'triangle'
+            : mode === 'text'
+              ? 'text'
+              : null)
+
+  if (!['square', 'circle'].includes(String(effectiveBoxVariant))) {
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'MultiPoint', coordinates: points },
+      properties: { featureType, isDraftVertex: true },
+    })
+  }
 
   const previewPoints = [...points]
   if (
@@ -901,12 +1098,12 @@ export function draftToFeatures(
         properties: { featureType },
       })
     }
-  } else if (['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(mode)) {
+  } else if (['rectangle', 'square', 'triangle', 'ellipse', 'text'].includes(mode) || effectiveBoxVariant === 'circle') {
     if (previewPoints.length >= 2) {
       const [start, end] = [previewPoints[0], previewPoints[previewPoints.length - 1]]
       const lngDelta = end[0] - start[0]
       const latDelta = end[1] - start[1]
-      if (mode === 'triangle') {
+      if (effectiveBoxVariant === 'triangle') {
         const apex: Position = [start[0] + lngDelta / 2, start[1]]
         const left: Position = [start[0], end[1]]
         const right: Position = [end[0], end[1]]
@@ -916,7 +1113,7 @@ export function draftToFeatures(
           geometry: { type: 'Polygon', coordinates: [ring] },
           properties: { featureType },
         })
-      } else if (mode === 'ellipse') {
+      } else if (effectiveBoxVariant === 'ellipse') {
         const segments = 40
         const ring: Position[] = []
         if (map) {
@@ -950,7 +1147,13 @@ export function draftToFeatures(
           geometry: { type: 'Polygon', coordinates: [ring] },
           properties: { featureType },
         })
-      } else if (mode === 'text') {
+      } else if (effectiveBoxVariant === 'circle') {
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [buildCircleRing(start, end, map)] },
+          properties: { featureType },
+        })
+      } else if (effectiveBoxVariant === 'text') {
         const p1: Position = [start[0], start[1]]
         const p2: Position = [end[0], start[1]]
         const p3: Position = [end[0], end[1]]
@@ -962,18 +1165,16 @@ export function draftToFeatures(
           properties: { featureType },
         })
       } else {
-        const normalizedEnd: Position =
-          mode === 'square'
-            ? [
-                start[0] + Math.sign(lngDelta || 1) * Math.min(Math.abs(lngDelta), Math.abs(latDelta)),
-                start[1] + Math.sign(latDelta || 1) * Math.min(Math.abs(lngDelta), Math.abs(latDelta)),
+        const ring: Position[] =
+          effectiveBoxVariant === 'square'
+            ? buildSquareRing(start, end, map)
+            : [
+                [start[0], start[1]],
+                [end[0], start[1]],
+                [end[0], end[1]],
+                [start[0], end[1]],
+                [start[0], start[1]],
               ]
-            : end
-        const p1: Position = [start[0], start[1]]
-        const p2: Position = [normalizedEnd[0], start[1]]
-        const p3: Position = [normalizedEnd[0], normalizedEnd[1]]
-        const p4: Position = [start[0], normalizedEnd[1]]
-        const ring: Position[] = [p1, p2, p3, p4, p1]
         features.push({
           type: 'Feature',
           geometry: { type: 'Polygon', coordinates: [ring] },

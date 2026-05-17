@@ -26,6 +26,7 @@ import { useMapRenderer } from '../hooks/useMapRenderer'
 import { useSnapEngine, type SnapPreview } from '../hooks/useSnapEngine'
 import {
   useDrawingEngine,
+  type BoxShapeVariant,
   type DrawMode,
   featureTypeForMode,
   draftToFeatures,
@@ -185,6 +186,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [isCreatingFloor, setIsCreatingFloor] = useState(false)
   const [isUpdatingFloor, setIsUpdatingFloor] = useState(false)
   const [textBoxDraft, setTextBoxDraft] = useState<{ start: Position; end: Position; text: string } | null>(null)
+  const [boxShapeVariant, setBoxShapeVariant] = useState<BoxShapeVariant | null>(null)
 
   // --- Child project navigation ---
   const [projectStack, setProjectStack] = useState<Array<{ id: string; name: string }>>([])
@@ -211,7 +213,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const mode = useMemo<DrawMode>(() => userMode, [userMode])
 
   const activeFeatureType = featureTypeForMode(mode)
-  const currentDraftCollection = draftToFeatures(mode, draftPoints, activeFeatureType, hoverCoordinate, map)
+  const currentDraftCollection = draftToFeatures(mode, draftPoints, activeFeatureType, hoverCoordinate, map, boxShapeVariant)
   const toolsEnabled = mapReady
 
   const featureIdForState = useCallback((feature: Feature) => String(feature.id ?? feature.properties?.id ?? ''), [])
@@ -302,6 +304,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       setMessage('Select a floor before drawing')
       return
     }
+    setBoxShapeVariant(null)
     setUserMode(newMode)
   }, [canDrawOnFloor])
 
@@ -354,9 +357,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     targetMode: DrawMode,
     points: Position[],
     targetFeatureType: string,
+    shapeVariant: BoxShapeVariant | null = null,
   ) => {
     if (!project) return null
-    const collection = draftToFeatures(targetMode, points, targetFeatureType, null, map)
+    const collection = draftToFeatures(targetMode, points, targetFeatureType, null, map, shapeVariant)
     const finalFeature = collection?.features.find(
       (feature) =>
         !feature.properties?.isDraftVertex &&
@@ -414,8 +418,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   )
 
   const currentSavableDraftFeature = useMemo(
-    () => buildFinalFeatureFromPoints(mode, draftPoints, activeFeatureType),
-    [activeFeatureType, buildFinalFeatureFromPoints, draftPoints, mode],
+    () => buildFinalFeatureFromPoints(mode, draftPoints, activeFeatureType, boxShapeVariant),
+    [activeFeatureType, boxShapeVariant, buildFinalFeatureFromPoints, draftPoints, mode],
   )
   const hasPendingChanges = Boolean(
     pendingCreatedFeatures.length > 0 ||
@@ -499,6 +503,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       setPendingDeletedFeatureIds([])
       setMessage('Draft feature saved')
       setDraftPoints([])
+      setBoxShapeVariant(null)
       return true
     } catch (error) {
       if (isMountedRef.current) {
@@ -793,6 +798,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     }
     stageCreatedFeature(currentSavableDraftFeature, { select: false })
     setDraftPoints([])
+    setBoxShapeVariant(null)
     setMessage('Shape added to draft')
   }, [currentSavableDraftFeature, handleLassoSelection, stageCreatedFeature])
 
@@ -812,6 +818,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onDeleteFeatures: handleDeleteFeatures,
     onMoveFeatures: handleMoveFeatures,
     onMoveEnd: handlePersistMovedFeatures,
+    onSetBoxShapeVariant: setBoxShapeVariant,
     onRotateFeatures: (featureIds, angleDeg) => {
       if (!project || !map || featureIds.length === 0) return
       const featureSet = new Set(featureIds)
@@ -827,13 +834,21 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     },
     onQuickCreateTextBox: handleQuickCreateTextBox,
     onCompleteBoxShape: (shapeMode, start, end) => {
-      const nextFeature = buildFinalFeatureFromPoints(shapeMode, [start, end], featureTypeForMode(shapeMode))
+      const baseMode = shapeMode === 'circle' ? 'ellipse' : shapeMode
+      const nextFeature = buildFinalFeatureFromPoints(
+        baseMode,
+        [start, end],
+        featureTypeForMode(baseMode),
+        shapeMode,
+      )
       if (!nextFeature) {
         setDraftPoints([])
+        setBoxShapeVariant(null)
         setMessage('Shape rejected: it must stay inside the project base boundary')
         return
       }
       stageCreatedFeature(nextFeature, { select: false })
+      setBoxShapeVariant(null)
       setMessage('Shape added to draft')
     },
     onCompletePenPath: (points) => {
