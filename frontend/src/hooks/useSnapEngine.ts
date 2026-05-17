@@ -8,6 +8,16 @@ export interface SnapPreview {
   kind: 'vertex' | 'midpoint' | 'edge' | 'corridor_center' | 'door_center'
 }
 
+function samePosition(left: Position | null, right: Position | null) {
+  if (!left || !right) return left === right
+  return left[0] === right[0] && left[1] === right[1]
+}
+
+function sameSnap(left: SnapPreview | null, right: SnapPreview | null) {
+  if (!left || !right) return left === right
+  return left.kind === right.kind && samePosition(left.point, right.point)
+}
+
 function nearestPointOnSegment(
   map: Map,
   point: Position,
@@ -74,6 +84,10 @@ export function useSnapEngine({
   const projectRef = useRef(project)
   const visibleFeaturesRef = useRef(visibleFeatures)
   const toolsEnabledRef = useRef(toolsEnabled)
+  const pendingPointerRef = useRef<Position | null>(null)
+  const frameRef = useRef<number | null>(null)
+  const lastHoverRef = useRef<Position | null>(null)
+  const lastSnapRef = useRef<SnapPreview | null>(null)
 
   useEffect(() => {
     projectRef.current = project
@@ -92,15 +106,31 @@ export function useSnapEngine({
       return
     }
 
-    const handleMouseMove = (event: { lngLat: { lng: number; lat: number } }) => {
-      if (isMounted()) {
-        onHoverCoordinate([event.lngLat.lng, event.lngLat.lat])
+    const publishHover = (point: Position) => {
+      if (!isMounted()) return
+      if (samePosition(lastHoverRef.current, point)) return
+      lastHoverRef.current = point
+      onHoverCoordinate(point)
+    }
+
+    const publishSnap = (snap: SnapPreview | null) => {
+      if (!isMounted()) return
+      if (sameSnap(lastSnapRef.current, snap)) return
+      lastSnapRef.current = snap
+      onSnapPreview(snap)
+    }
+
+    const processPointer = () => {
+      frameRef.current = null
+      const pointer = pendingPointerRef.current
+      if (!pointer) {
+        return
       }
+      publishHover(pointer)
+
       const snappingConfig = projectRef.current?.config?.snapping
       if (!toolsEnabledRef.current || !snappingConfig?.enabled) {
-        if (isMounted()) {
-          onSnapPreview(null)
-        }
+        publishSnap(null)
         return
       }
 
@@ -113,7 +143,7 @@ export function useSnapEngine({
       const snapDistancePx = config?.snapping.distancePx ?? projectConfig.snapping.distancePx
       let bestSnap: SnapPreview | null = null
       let bestDistance = Number.POSITIVE_INFINITY
-      const currentPoint: Position = [event.lngLat.lng, event.lngLat.lat]
+      const currentPoint: Position = pointer
       const candidates = [...visibleFeaturesRef.current, boundaryFeature(currentProject)]
 
       for (const feature of candidates) {
@@ -190,13 +220,27 @@ export function useSnapEngine({
           }
         }
       }
-      if (isMounted()) {
-        onSnapPreview(bestSnap)
+      publishSnap(bestSnap)
+    }
+
+    const scheduleProcess = () => {
+      if (frameRef.current !== null) {
+        return
       }
+      frameRef.current = window.requestAnimationFrame(processPointer)
+    }
+
+    const handleMouseMove = (event: { lngLat: { lng: number; lat: number } }) => {
+      pendingPointerRef.current = [event.lngLat.lng, event.lngLat.lat]
+      scheduleProcess()
     }
 
     map.on('mousemove', handleMouseMove)
     return () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current)
+        frameRef.current = null
+      }
       map.off('mousemove', handleMouseMove)
     }
   }, [map, isMounted, onSnapPreview, onHoverCoordinate, projectConfig.snapping.distancePx])
