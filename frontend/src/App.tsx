@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, MapPinned } from 'lucide-react'
 import { DroneMap } from './components/DroneMap'
 import { OsmEnclosingPanel } from './components/OsmEnclosingPanel'
 import { SpatialEditor } from './components/SpatialEditor'
 import { DroneTable } from './components/DroneTable'
+import { DroneTrackingControls } from './components/DroneTrackingControls'
 import { Notice, type NoticeState } from './components/Notice'
 import { StatusStrip } from './components/StatusStrip'
 import { useCommandDispatch } from './hooks/useCommandDispatch'
@@ -24,6 +25,7 @@ import type {
   MapTargetDraft,
   OsmCandidate,
   OsmElementGeometryResponse,
+  SaveTrackedRouteResponse,
 } from './types/drone'
 import { formatDroneList } from './utils/format'
 
@@ -86,6 +88,28 @@ function App() {
   const [editorModeOverride, setEditorModeOverride] = useState<EditorMode | null>(null)
   const [confirmedLargeArea, setConfirmedLargeArea] = useState(false)
   const [currentPath, setCurrentPath] = useState(window.location.pathname)
+  const [selectedTrackingDroneId, setSelectedTrackingDroneId] = useState<string | null>(null)
+  const [trackingState, setTrackingState] = useState<{
+    status: 'idle' | 'tracking' | 'paused' | 'completed'
+    pointsCount: number
+    maxPoints: number
+    canSave: boolean
+    isSaving: boolean
+    activeDroneId: string | null
+  }>({
+    status: 'idle',
+    pointsCount: 0,
+    maxPoints: 10_000,
+    canSave: false,
+    isSaving: false,
+    activeDroneId: null,
+  })
+  const trackingControllerRef = useRef<{
+    startTracking: (droneId: string) => void
+    stopTracking: () => void
+    clearTracking: () => void
+    saveTrackingRoute: () => Promise<SaveTrackedRouteResponse>
+  } | null>(null)
   const spatialEditorMatch = currentPath.match(/^\/spatial-editor\/([^/]+)$/)
 
   useEffect(() => {
@@ -232,6 +256,90 @@ function App() {
     }
   }, [selectedTarget])
 
+  const handleTrackingStateChange = useCallback((nextState: {
+    status: 'idle' | 'tracking' | 'paused' | 'completed'
+    pointsCount: number
+    maxPoints: number
+    canSave: boolean
+    isSaving: boolean
+    activeDroneId: string | null
+  }) => {
+    setTrackingState(nextState)
+  }, [])
+
+  const handleTrackingControllerReady = useCallback((controller: {
+    startTracking: (droneId: string) => void
+    stopTracking: () => void
+    clearTracking: () => void
+    saveTrackingRoute: () => Promise<SaveTrackedRouteResponse>
+  } | null) => {
+    trackingControllerRef.current = controller
+  }, [])
+
+  const handleSelectDroneForTracking = useCallback((droneId: string) => {
+    if (selectedTrackingDroneId === droneId) return
+    if (trackingState.status === 'tracking') {
+      const ok = window.confirm('Tracking is active. Stop current tracking and switch drone?')
+      if (!ok) return
+      trackingControllerRef.current?.stopTracking()
+    }
+    setSelectedTrackingDroneId(droneId)
+  }, [selectedTrackingDroneId, trackingState.status])
+
+  const handleStartTracking = useCallback(() => {
+    if (!selectedTrackingDroneId) {
+      setNotice({
+        tone: 'info',
+        title: 'Select a drone first',
+        detail: 'Click a drone row in Connected Drones table before starting tracking.',
+      })
+      return
+    }
+    if (selectedTarget) {
+      handleCancelTarget()
+    }
+    trackingControllerRef.current?.startTracking(selectedTrackingDroneId)
+  }, [handleCancelTarget, selectedTarget, selectedTrackingDroneId])
+
+  const handleStopTracking = useCallback(() => {
+    trackingControllerRef.current?.stopTracking()
+  }, [])
+
+  const handleClearTracking = useCallback(() => {
+    trackingControllerRef.current?.clearTracking()
+  }, [])
+
+  const handleSaveTrackingRoute = useCallback(async () => {
+    const controller = trackingControllerRef.current
+    if (!controller) return
+    try {
+      const response = await controller.saveTrackingRoute()
+      setNotice({
+        tone: 'success',
+        title: 'Route saved',
+        detail: `Saved ${response.route.pointCount.toLocaleString()} points to ${response.route.path}`,
+      })
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        title: 'Save route failed',
+        detail: error instanceof Error ? error.message : 'Unable to save route',
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedTrackingDroneId) return
+    const stillConnected = connectedDrones.some((drone) => drone.id === selectedTrackingDroneId)
+    if (!stillConnected) {
+      setNotice({
+        tone: 'info',
+        title: 'Selected drone disconnected',
+        detail: `Tracking data is kept. "${selectedTrackingDroneId}" is no longer connected.`,
+      })
+    }
+  }, [connectedDrones, selectedTrackingDroneId])
+
   const handleCandidateHover = useCallback((candidate: OsmCandidate | null) => {
     setLocationFetch((current) => ({
       ...current,
@@ -317,6 +425,7 @@ function App() {
     if (!candidate) {
       return
     }
+    window.dispatchEvent(new Event('drone:flush-main-map-camera'))
 
     setIsOpeningEditor(true)
     setLocationFetch((current) => ({
@@ -415,6 +524,10 @@ function App() {
             onFetchLocation={handleFetchLocation}
             onCancelTarget={handleCancelTarget}
             onConfirmTarget={handleConfirmTarget}
+            onTrackingNotice={setNotice}
+            selectedTrackingDroneId={selectedTrackingDroneId}
+            onTrackingStateChange={handleTrackingStateChange}
+            onTrackingControllerReady={handleTrackingControllerReady}
           />
         </main>
 
@@ -485,8 +598,23 @@ function App() {
                   <DroneTable
                     drones={connectedDrones}
                     isTelemetryOpen={connectionStatus === 'open'}
+                    selectedTrackingDroneId={selectedTrackingDroneId}
+                    onSelectTrackingDrone={handleSelectDroneForTracking}
                   />
                 </section>
+
+                <DroneTrackingControls
+                  selectedDroneId={selectedTrackingDroneId}
+                  status={trackingState.status}
+                  pointsCount={trackingState.pointsCount}
+                  maxPoints={trackingState.maxPoints}
+                  canSave={trackingState.canSave}
+                  isSaving={trackingState.isSaving}
+                  onStart={handleStartTracking}
+                  onStop={handleStopTracking}
+                  onSave={handleSaveTrackingRoute}
+                  onClear={handleClearTracking}
+                />
 
                 <section
                   className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"

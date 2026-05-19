@@ -5,6 +5,7 @@ import type { DrawingProject } from '../types/drone'
 import type { SnapPreview } from './useSnapEngine'
 
 const featureLayers = ['project-features-fill', 'project-features-line', 'project-features-point']
+const DEBUG_RECTANGLE_DRAWING = false
 
 function isEditableEventTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -44,6 +45,8 @@ type ActiveDrawGestureKind =
   | 'delete_lasso'
   | 'move_feature'
   | 'box_select'
+
+type CancelDrawingReason = 'right-click' | 'escape' | 'tool-change'
 
 interface PointerState {
   lng: number
@@ -241,30 +244,73 @@ function buildSquareRing(start: Position, end: Position, map: Map | null): Posit
   const endPx = map.project([end[0], end[1]])
   const dx = endPx.x - startPx.x
   const dy = endPx.y - startPx.y
-  const horizontalDominant = Math.abs(dx) >= Math.abs(dy)
-  const side = horizontalDominant ? Math.abs(dx) : Math.abs(dy)
-
-  const p1 = { x: startPx.x, y: startPx.y }
-  let p2: { x: number; y: number }
-  let p3: { x: number; y: number }
-  let p4: { x: number; y: number }
-
-  if (horizontalDominant) {
-    const verticalSign = Math.sign(dy || 1)
-    p2 = { x: startPx.x + Math.sign(dx || 1) * side, y: startPx.y }
-    p3 = { x: p2.x, y: p2.y + verticalSign * side }
-    p4 = { x: p1.x, y: p1.y + verticalSign * side }
-  } else {
-    const horizontalSign = Math.sign(dx || 1)
-    p2 = { x: startPx.x, y: startPx.y + Math.sign(dy || 1) * side }
-    p3 = { x: p2.x + horizontalSign * side, y: p2.y }
-    p4 = { x: p1.x + horizontalSign * side, y: p1.y }
+  const side = Math.max(1, Math.min(Math.abs(dx), Math.abs(dy)))
+  const endSquarePx = {
+    x: startPx.x + Math.sign(dx || 1) * side,
+    y: startPx.y + Math.sign(dy || 1) * side,
   }
+  const p1 = { x: startPx.x, y: startPx.y }
+  const p2 = { x: endSquarePx.x, y: startPx.y }
+  const p3 = { x: endSquarePx.x, y: endSquarePx.y }
+  const p4 = { x: startPx.x, y: endSquarePx.y }
 
   return [p1, p2, p3, p4, p1].map((point) => {
     const lngLat = map.unproject([point.x, point.y])
     return [lngLat.lng, lngLat.lat] as Position
   })
+}
+
+function buildRectangleRing(start: Position, end: Position, map: Map | null): Position[] {
+  if (!map) {
+    return [
+      [start[0], start[1]],
+      [end[0], start[1]],
+      [end[0], end[1]],
+      [start[0], end[1]],
+      [start[0], start[1]],
+    ]
+  }
+  const startPx = map.project([start[0], start[1]])
+  const endPx = map.project([end[0], end[1]])
+  const p1 = { x: startPx.x, y: startPx.y }
+  const p2 = { x: endPx.x, y: startPx.y }
+  const p3 = { x: endPx.x, y: endPx.y }
+  const p4 = { x: startPx.x, y: endPx.y }
+  return [p1, p2, p3, p4, p1].map((point) => {
+    const lngLat = map.unproject([point.x, point.y])
+    return [lngLat.lng, lngLat.lat] as Position
+  })
+}
+
+function boxEndFromPointer(
+  map: Map | null,
+  start: Position,
+  pointer: { x: number; y: number },
+  variant: BoxShapeVariant | null,
+): Position {
+  if (!map) {
+    return start
+  }
+  const startPx = map.project([start[0], start[1]])
+  if (variant === 'square') {
+    const dx = pointer.x - startPx.x
+    const dy = pointer.y - startPx.y
+    const size = Math.max(1, Math.min(Math.abs(dx), Math.abs(dy)))
+    const endPx = {
+      x: startPx.x + Math.sign(dx || 1) * size,
+      y: startPx.y + Math.sign(dy || 1) * size,
+    }
+    if (DEBUG_RECTANGLE_DRAWING) {
+      console.info('[rect-debug] square', { startPx, pointer, endPx })
+    }
+    const lngLat = map.unproject([endPx.x, endPx.y])
+    return [lngLat.lng, lngLat.lat]
+  }
+  if (DEBUG_RECTANGLE_DRAWING && variant === 'rectangle') {
+    console.info('[rect-debug] rectangle', { startPx, pointer })
+  }
+  const lngLat = map.unproject([pointer.x, pointer.y])
+  return [lngLat.lng, lngLat.lat]
 }
 
 function geometryCentroid(geometry: Geometry): Position | null {
@@ -360,12 +406,18 @@ interface UseDrawingEngineOptions {
   onDeleteFeatures?: (featureIds: string[]) => void
   onMoveFeatures?: (featureIds: string[], deltaLng: number, deltaLat: number) => void
   onMoveEnd?: (featureIds: string[]) => void
-  onRotateFeatures?: (featureIds: string[], angleDeg: number) => void
+  onRotateGestureStart?: (featureIds: string[]) => void
+  onRotateGestureDelta?: (featureIds: string[], angleDeg: number) => { blocked: boolean }
+  onRotateGestureEnd?: (featureIds: string[]) => void
   onSetBoxShapeVariant?: (variant: BoxShapeVariant | null) => void
   onQuickCreateTextBox?: (start: Position, end: Position) => void
   onCompleteBoxShape?: (mode: 'rectangle' | 'square' | 'triangle' | 'ellipse' | 'circle', start: Position, end: Position) => void
   onCompletePenPath?: (points: Position[]) => void
   onCompleteLasso?: (start: Position, end: Position) => void
+  draftPointsRef?: React.RefObject<Position[]>
+  onClearDraftPoints?: () => void
+  onCancelExternalDrafts?: (reason: CancelDrawingReason) => boolean
+  onClearSnapPreview?: () => void
 }
 
 export function useDrawingEngine({
@@ -384,12 +436,18 @@ export function useDrawingEngine({
   onDeleteFeatures,
   onMoveFeatures,
   onMoveEnd,
-  onRotateFeatures,
+  onRotateGestureStart,
+  onRotateGestureDelta,
+  onRotateGestureEnd,
   onSetBoxShapeVariant,
   onQuickCreateTextBox,
   onCompleteBoxShape,
   onCompletePenPath,
   onCompleteLasso,
+  draftPointsRef,
+  onClearDraftPoints,
+  onCancelExternalDrafts,
+  onClearSnapPreview,
 }: UseDrawingEngineOptions) {
   const projectRef = useRef(project)
   const toolsEnabledRef = useRef(toolsEnabled)
@@ -398,23 +456,28 @@ export function useDrawingEngine({
   const onDeleteFeaturesRef = useRef(onDeleteFeatures)
   const onMoveFeaturesRef = useRef(onMoveFeatures)
   const onMoveEndRef = useRef(onMoveEnd)
-  const onRotateFeaturesRef = useRef(onRotateFeatures)
+  const onRotateGestureStartRef = useRef(onRotateGestureStart)
+  const onRotateGestureDeltaRef = useRef(onRotateGestureDelta)
+  const onRotateGestureEndRef = useRef(onRotateGestureEnd)
   const onSetBoxShapeVariantRef = useRef(onSetBoxShapeVariant)
   const onQuickCreateTextBoxRef = useRef(onQuickCreateTextBox)
   const onCompleteBoxShapeRef = useRef(onCompleteBoxShape)
   const onCompletePenPathRef = useRef(onCompletePenPath)
   const onCompleteLassoRef = useRef(onCompleteLasso)
+  const draftPointsRefRef = useRef(draftPointsRef)
+  const onClearDraftPointsRef = useRef(onClearDraftPoints)
+  const onCancelExternalDraftsRef = useRef(onCancelExternalDrafts)
+  const onClearSnapPreviewRef = useRef(onClearSnapPreview)
   const boxStartRef = useRef<{ x: number; y: number } | null>(null)
   const movingFeaturesRef = useRef<{ featureIds: string[]; lastLng: number; lastLat: number; moved: boolean } | null>(null)
   const rotatingFeaturesRef = useRef<{ featureIds: string[]; centerX: number; centerY: number; lastAngle: number; rotated: boolean } | null>(null)
   const boxShapeStartRef = useRef<Position | null>(null)
-  const squareAxisRef = useRef<'horizontal' | 'vertical' | null>(null)
-  const squareNormalSignRef = useRef<1 | -1 | null>(null)
   const circleAxisRef = useRef<'horizontal' | 'vertical' | null>(null)
   const freehandStartedRef = useRef(false)
   const freehandPointsRef = useRef<Position[]>([])
   const lassoStartedRef = useRef(false)
   const lassoStartRef = useRef<Position | null>(null)
+  const cancelActiveDrawingRef = useRef<((reason: CancelDrawingReason) => boolean) | null>(null)
 
   useEffect(() => {
     projectRef.current = project
@@ -445,8 +508,16 @@ export function useDrawingEngine({
   }, [onMoveEnd])
 
   useEffect(() => {
-    onRotateFeaturesRef.current = onRotateFeatures
-  }, [onRotateFeatures])
+    onRotateGestureStartRef.current = onRotateGestureStart
+  }, [onRotateGestureStart])
+
+  useEffect(() => {
+    onRotateGestureDeltaRef.current = onRotateGestureDelta
+  }, [onRotateGestureDelta])
+
+  useEffect(() => {
+    onRotateGestureEndRef.current = onRotateGestureEnd
+  }, [onRotateGestureEnd])
 
   useEffect(() => {
     onSetBoxShapeVariantRef.current = onSetBoxShapeVariant
@@ -467,6 +538,22 @@ export function useDrawingEngine({
   useEffect(() => {
     onCompleteLassoRef.current = onCompleteLasso
   }, [onCompleteLasso])
+
+  useEffect(() => {
+    draftPointsRefRef.current = draftPointsRef
+  }, [draftPointsRef])
+
+  useEffect(() => {
+    onClearDraftPointsRef.current = onClearDraftPoints
+  }, [onClearDraftPoints])
+
+  useEffect(() => {
+    onCancelExternalDraftsRef.current = onCancelExternalDrafts
+  }, [onCancelExternalDrafts])
+
+  useEffect(() => {
+    onClearSnapPreviewRef.current = onClearSnapPreview
+  }, [onClearSnapPreview])
 
   const suppressClickRef = useRef(false)
   const getSelectedFeatureById = useCallback((featureId: string) => {
@@ -526,53 +613,6 @@ export function useDrawingEngine({
       centerX: projectedCenter.x,
       centerY: projectedCenter.y,
     }
-  }, [map])
-
-  const normalizeSquareDrag = useCallback((start: Position, rawEnd: Position): Position => {
-    if (!map) return rawEnd
-    const startPx = map.project([start[0], start[1]])
-    const endPx = map.project([rawEnd[0], rawEnd[1]])
-    const dx = endPx.x - startPx.x
-    const dy = endPx.y - startPx.y
-    const movementThreshold = 4
-
-    let axis = squareAxisRef.current
-    if (!axis && (Math.abs(dx) >= movementThreshold || Math.abs(dy) >= movementThreshold)) {
-      axis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical'
-      squareAxisRef.current = axis
-    }
-    if (!axis) {
-      axis = Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical'
-    }
-
-    let normalSign = squareNormalSignRef.current
-    if (axis === 'horizontal') {
-      if (!normalSign && Math.abs(dy) >= movementThreshold) {
-        normalSign = Math.sign(dy) === -1 ? -1 : 1
-        squareNormalSignRef.current = normalSign
-      }
-      normalSign = normalSign ?? 1
-      const side = Math.abs(dx)
-      const normalizedPx = {
-        x: startPx.x + Math.sign(dx || 1) * side,
-        y: startPx.y + normalSign * side,
-      }
-      const unprojected = map.unproject([normalizedPx.x, normalizedPx.y])
-      return [unprojected.lng, unprojected.lat]
-    }
-
-    if (!normalSign && Math.abs(dx) >= movementThreshold) {
-      normalSign = Math.sign(dx) === -1 ? -1 : 1
-      squareNormalSignRef.current = normalSign
-    }
-    normalSign = normalSign ?? 1
-    const side = Math.abs(dy)
-    const normalizedPx = {
-      x: startPx.x + normalSign * side,
-      y: startPx.y + Math.sign(dy || 1) * side,
-    }
-    const unprojected = map.unproject([normalizedPx.x, normalizedPx.y])
-    return [unprojected.lng, unprojected.lat]
   }, [map])
 
   const normalizeCircleDrag = useCallback((start: Position, rawEnd: Position): Position => {
@@ -728,12 +768,63 @@ export function useDrawingEngine({
       }
     }
 
+    const hasActivePointDraft = () => {
+      const draftPoints = draftPointsRefRef.current?.current ?? []
+      if (draftPoints.length === 0) return false
+      return ['polygon', 'line', 'wall', 'indoor_route', 'point', 'door', 'room', 'corridor'].includes(modeRef.current)
+    }
+
+    const cancelActiveDrawing = (reason: CancelDrawingReason): boolean => {
+      const externalCancelled = onCancelExternalDraftsRef.current?.(reason) ?? false
+      const hadDrawingGesture =
+        activeGesture === 'box_shape' ||
+        activeGesture === 'pen' ||
+        activeGesture === 'delete_lasso'
+      const hasDraft =
+        hadDrawingGesture ||
+        boxShapeStartRef.current !== null ||
+        freehandStartedRef.current ||
+        lassoStartedRef.current ||
+        hasActivePointDraft() ||
+        externalCancelled
+
+      if (!hasDraft) {
+        return false
+      }
+
+      boxShapeStartRef.current = null
+      circleAxisRef.current = null
+      freehandStartedRef.current = false
+      freehandPointsRef.current = []
+      lassoStartedRef.current = false
+      lassoStartRef.current = null
+
+      if (activeGesture === 'box_shape' || activeGesture === 'pen' || activeGesture === 'delete_lasso') {
+        activeGesture = null
+      }
+
+      onSetBoxShapeVariantRef.current?.(null)
+      if (onClearDraftPointsRef.current) {
+        onClearDraftPointsRef.current()
+      } else {
+        onAddPoint(() => [])
+      }
+      onClearSnapPreviewRef.current?.()
+      setCursor(modeRef.current === 'move' ? 'grab' : '')
+      syncDragPanByMode()
+      syncWindowListeners()
+      return true
+    }
+    cancelActiveDrawingRef.current = cancelActiveDrawing
+
     const finalizeRotationFromPointer = () => {
       if (!rotatingFeaturesRef.current) {
         return
       }
+      const featureIds = [...rotatingFeaturesRef.current.featureIds]
       const didRotate = rotatingFeaturesRef.current.rotated
       rotatingFeaturesRef.current = null
+      onRotateGestureEndRef.current?.(featureIds)
       activeGesture = null
       setCursor('default')
       if (didRotate) {
@@ -769,13 +860,11 @@ export function useDrawingEngine({
       const mode = modeRef.current
       const variant = resolveBoxShapeVariant(mode, pointer.shiftKey)
       const end: Position =
-        variant === 'square'
-          ? normalizeSquareDrag(start, rawEnd)
+        variant === 'square' || variant === 'rectangle'
+          ? boxEndFromPointer(map, start, { x: pointer.x, y: pointer.y }, variant)
           : variant === 'circle'
             ? normalizeCircleDrag(start, rawEnd)
             : rawEnd
-      squareAxisRef.current = null
-      squareNormalSignRef.current = null
       circleAxisRef.current = null
       onSetBoxShapeVariantRef.current?.(null)
       const d = Math.hypot(end[0] - start[0], end[1] - start[1])
@@ -848,16 +937,20 @@ export function useDrawingEngine({
     }
 
     const handlePointerMove = (pointer: PointerState) => {
-      if (rotatingFeaturesRef.current && onRotateFeaturesRef.current) {
+      if (rotatingFeaturesRef.current && onRotateGestureDeltaRef.current) {
         const nextAngle = Math.atan2(
           pointer.y - rotatingFeaturesRef.current.centerY,
           pointer.x - rotatingFeaturesRef.current.centerX,
         )
         const deltaDeg = ((nextAngle - rotatingFeaturesRef.current.lastAngle) * 180) / Math.PI
         if (Math.abs(deltaDeg) >= 0.5) {
-          onRotateFeaturesRef.current(rotatingFeaturesRef.current.featureIds, -deltaDeg)
+          const result = onRotateGestureDeltaRef.current(
+            rotatingFeaturesRef.current.featureIds,
+            -deltaDeg,
+          )
           rotatingFeaturesRef.current.lastAngle = nextAngle
-          rotatingFeaturesRef.current.rotated = true
+          rotatingFeaturesRef.current.rotated = rotatingFeaturesRef.current.rotated || !result.blocked
+          setCursor(result.blocked ? 'not-allowed' : 'grabbing')
         }
         return
       }
@@ -868,11 +961,25 @@ export function useDrawingEngine({
         const variant = resolveBoxShapeVariant(mode, pointer.shiftKey)
         onSetBoxShapeVariantRef.current?.(variant)
         const end: Position =
-          variant === 'square'
-            ? normalizeSquareDrag(boxShapeStartRef.current, rawEnd)
+          variant === 'square' || variant === 'rectangle'
+            ? boxEndFromPointer(map, boxShapeStartRef.current, { x: pointer.x, y: pointer.y }, variant)
             : variant === 'circle'
               ? normalizeCircleDrag(boxShapeStartRef.current, rawEnd)
               : rawEnd
+        if ((variant === 'rectangle' || variant === 'square') && projectRef.current) {
+          const preview = draftToFeatures(
+            mode,
+            [boxShapeStartRef.current, end],
+            featureTypeForMode(mode),
+            null,
+            map,
+            variant,
+          )
+          const previewFeature = preview?.features.find((feature) => !feature.properties?.isDraftVertex) as Feature | undefined
+          if (previewFeature && !featureInsideBoundary(previewFeature, projectRef.current, map)) {
+            return
+          }
+        }
         onAddPoint(() => [boxShapeStartRef.current!, end])
         return
       }
@@ -946,10 +1053,6 @@ export function useDrawingEngine({
         e.originalEvent.preventDefault()
         const start: Position = [e.lngLat.lng, e.lngLat.lat]
         boxShapeStartRef.current = start
-        if (mode === 'square' || mode === 'rectangle') {
-          squareAxisRef.current = null
-          squareNormalSignRef.current = null
-        }
         if (mode === 'ellipse') {
           circleAxisRef.current = null
         }
@@ -1026,6 +1129,7 @@ export function useDrawingEngine({
                 lastAngle: Math.atan2(e.point.y - handle.centerY, e.point.x - handle.centerX),
                 rotated: false,
               }
+              onRotateGestureStartRef.current?.([currentSelection[0]])
               map.dragPan.disable()
               setCursor('grabbing')
               syncWindowListeners()
@@ -1064,6 +1168,10 @@ export function useDrawingEngine({
     }
 
     const handleContextMenu = (e: MapMouseEvent) => {
+      if (cancelActiveDrawing('right-click')) {
+        e.preventDefault()
+        return
+      }
       const first = hitTestFeatureAtPoint(e.point)
       const firstId = first?.id ?? first?.properties?.id
       if (firstId && onDeleteFeaturesRef.current) {
@@ -1091,6 +1199,7 @@ export function useDrawingEngine({
     map.doubleClickZoom.disable()
 
     return () => {
+      cancelActiveDrawingRef.current = null
       detachWindowListeners()
       map.off('click', handleMapClick)
       map.off('mousedown', handleMouseDown)
@@ -1100,7 +1209,7 @@ export function useDrawingEngine({
       map.off('dblclick', handleDblClick)
       map.doubleClickZoom.enable()
     }
-  }, [map, handleMapClick, hitTestFeatureAtPoint, onAddPoint, modeRef, selectedFeatureIdsRef, getRotateHandle, getSelectedFeatureById, normalizeCircleDrag, normalizeSquareDrag, resolveBoxShapeVariant, isMounted, onMessage])
+  }, [map, handleMapClick, hitTestFeatureAtPoint, onAddPoint, modeRef, selectedFeatureIdsRef, getRotateHandle, getSelectedFeatureById, normalizeCircleDrag, resolveBoxShapeVariant, isMounted, onMessage])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1115,6 +1224,9 @@ export function useDrawingEngine({
 
       if (e.key === 'Escape') {
         e.preventDefault()
+        if (cancelActiveDrawingRef.current?.('escape')) {
+          return
+        }
         onSetBoxShapeVariantRef.current?.(null)
         onAddPoint(() => [])
         onSetSelection([])
@@ -1315,13 +1427,7 @@ export function draftToFeatures(
         const ring: Position[] =
           effectiveBoxVariant === 'square'
             ? buildSquareRing(start, end, map)
-            : [
-                [start[0], start[1]],
-                [end[0], start[1]],
-                [end[0], end[1]],
-                [start[0], end[1]],
-                [start[0], start[1]],
-              ]
+            : buildRectangleRing(start, end, map)
         features.push({
           type: 'Feature',
           geometry: { type: 'Polygon', coordinates: [ring] },

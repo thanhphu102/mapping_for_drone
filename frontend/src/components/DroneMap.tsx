@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, FeatureCollection, Geometry, Position } from 'geojson'
 import type { GeoJSONSource } from 'maplibre-gl'
 import type { Map, MapLayerMouseEvent } from 'maplibre-gl'
 import { useDroneMap } from '../hooks/useDroneMap'
 import { useDroneMarkers } from '../hooks/useDroneMarkers'
+import { useDroneTracking } from '../hooks/useDroneTracking'
 import { useProjectedTarget } from '../hooks/useProjectedTarget'
 import { deleteDrawingProject, fetchMapOverlays } from '../services/spatial'
 import type {
@@ -15,6 +16,7 @@ import type {
   OsmCandidate,
   OsmGeometryPoint,
   OsmRelationMemberGeometry,
+  SaveTrackedRouteResponse,
 } from '../types/drone'
 import { TargetCommandPopover } from './TargetCommandPopover'
 
@@ -83,6 +85,22 @@ interface DroneMapProps {
   onFetchLocation: () => void
   onCancelTarget: () => void
   onConfirmTarget: () => void
+  onTrackingNotice: (notice: { tone: 'success' | 'error' | 'info'; title: string; detail?: string }) => void
+  selectedTrackingDroneId: string | null
+  onTrackingStateChange: (state: {
+    status: 'idle' | 'tracking' | 'paused' | 'completed'
+    pointsCount: number
+    maxPoints: number
+    canSave: boolean
+    isSaving: boolean
+    activeDroneId: string | null
+  }) => void
+  onTrackingControllerReady: (controller: {
+    startTracking: (droneId: string) => void
+    stopTracking: () => void
+    clearTracking: () => void
+    saveTrackingRoute: () => Promise<SaveTrackedRouteResponse>
+  } | null) => void
 }
 
 function toPositions(points: OsmGeometryPoint[]): Position[] {
@@ -300,8 +318,59 @@ export function DroneMap({
   onFetchLocation,
   onCancelTarget,
   onConfirmTarget,
+  onTrackingNotice,
+  selectedTrackingDroneId,
+  onTrackingStateChange,
+  onTrackingControllerReady,
 }: DroneMapProps) {
-  const { containerRef, map } = useDroneMap(onTargetSelect)
+  const isTrackingRef = useRef(false)
+  const handleMapTargetSelect = useCallback((target: MapTargetDraft) => {
+    if (isTrackingRef.current) {
+      return
+    }
+    onTargetSelect(target)
+  }, [onTargetSelect])
+  const { containerRef, map } = useDroneMap(handleMapTargetSelect)
+  const tracking = useDroneTracking({
+    map,
+    onNotice: onTrackingNotice,
+  })
+  useEffect(() => {
+    onTrackingControllerReady({
+      startTracking: tracking.startTracking,
+      stopTracking: tracking.stopTracking,
+      clearTracking: tracking.clearTracking,
+      saveTrackingRoute: tracking.saveTrackingRoute,
+    })
+    return () => onTrackingControllerReady(null)
+  }, [
+    onTrackingControllerReady,
+    tracking.clearTracking,
+    tracking.saveTrackingRoute,
+    tracking.startTracking,
+    tracking.stopTracking,
+  ])
+  useEffect(() => {
+    onTrackingStateChange({
+      status: tracking.status,
+      pointsCount: tracking.points.length,
+      maxPoints: tracking.maxPoints,
+      canSave: tracking.canSave,
+      isSaving: tracking.isSaving,
+      activeDroneId: tracking.droneId,
+    })
+  }, [
+    onTrackingStateChange,
+    tracking.canSave,
+    tracking.droneId,
+    tracking.isSaving,
+    tracking.maxPoints,
+    tracking.points.length,
+    tracking.status,
+  ])
+  useEffect(() => {
+    isTrackingRef.current = tracking.status === 'tracking'
+  }, [tracking.status])
   const targetPoint = useProjectedTarget(map, selectedTarget)
   const [overlayProjects, setOverlayProjects] = useState<DrawingProject[]>([])
   const [selectedOverlayProjectId, setSelectedOverlayProjectId] = useState<string | null>(null)
@@ -718,11 +787,28 @@ export function DroneMap({
     source.setData(candidateToFeatureCollection(highlightedCandidate))
   }, [highlightedCandidate, selectedBoundaryGeometry, map])
 
+  useEffect(() => {
+    if (
+      tracking.status === 'tracking' &&
+      selectedTrackingDroneId &&
+      tracking.droneId &&
+      selectedTrackingDroneId !== tracking.droneId
+    ) {
+      onTrackingNotice({
+        tone: 'info',
+        title: 'Drone selection changed',
+        detail: `Tracking continues for ${tracking.droneId}. Stop tracking before switching active route.`,
+      })
+    }
+  }, [onTrackingNotice, selectedTrackingDroneId, tracking.droneId, tracking.status])
+
   return (
     <div className="drone-map relative h-full min-h-[420px] overflow-hidden bg-slate-900 lg:min-h-0">
       <div ref={containerRef} className="absolute inset-0" aria-label="Drone map" />
       <div className="pointer-events-none absolute left-4 top-4 z-10 rounded-lg border border-white/20 bg-slate-950/80 px-3 py-2 text-sm text-white shadow-lg backdrop-blur">
-        Click map to set target for connected drones
+        {tracking.status === 'tracking'
+          ? 'Tracking active. Map click target selection is disabled.'
+          : 'Click map to set target for connected drones'}
       </div>
       {overlayZoom >= floorPanelMinZoom && nearestOverlayProjects.length > 0 ? (
         <div className="absolute left-4 top-16 z-20 w-72 rounded-lg border border-white/20 bg-slate-950/85 p-2 text-xs text-white shadow-lg backdrop-blur">
@@ -785,7 +871,7 @@ export function DroneMap({
           </div>
         </div>
       ) : null}
-      {selectedTarget ? (
+      {selectedTarget && tracking.status !== 'tracking' ? (
         <TargetCommandPopover
           target={selectedTarget}
           point={targetPoint}

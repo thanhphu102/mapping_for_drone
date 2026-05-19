@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import asyncio
 import json
 import os
 import math
+import re
 import time
 import ssl
 import urllib.request
@@ -39,7 +40,9 @@ extremely_large_area_threshold_m2 = 50_000_000
 
 data_dir = Path(__file__).resolve().parent / "data"
 projects_path = data_dir / "drawing_projects.json"
+tracked_routes_dir = data_dir / "tracked-routes"
 project_lock = asyncio.Lock()
+tracked_route_lock = asyncio.Lock()
 
 
 class CreateProjectFromOsmRequest(BaseModel):
@@ -68,6 +71,63 @@ class CreateChildProjectRequest(BaseModel):
 
 class SaveFeatureRequest(BaseModel):
     feature: Dict[str, Any]
+
+
+class TrackingPointPayload(BaseModel):
+    lng: float
+    lat: float
+    timestamp: int
+
+
+class SaveRouteRequest(BaseModel):
+    name: str
+    droneId: str
+    source: Literal["mouse_simulation", "drone_gps"]
+    geometry: Dict[str, Any]
+    points: List[TrackingPointPayload] = []
+
+
+def normalize_route_name(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    return cleaned or f"tracked-route-{int(time.time())}"
+
+
+def safe_route_filename_part(name: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-").lower()
+    return normalized[:64] or "tracked-route"
+
+
+def normalize_linestring_coordinates(geometry: Dict[str, Any]) -> List[List[float]]:
+    geometry_type = geometry.get("type")
+    if geometry_type != "LineString":
+        raise HTTPException(status_code=422, detail="geometry.type must be LineString")
+    coordinates = geometry.get("coordinates")
+    if not isinstance(coordinates, list) or len(coordinates) < 2:
+        raise HTTPException(status_code=422, detail="LineString must contain at least 2 coordinates")
+
+    normalized_coordinates: List[List[float]] = []
+    for index, coordinate in enumerate(coordinates):
+        if not isinstance(coordinate, list) or len(coordinate) != 2:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Coordinate at index {index} must be [lng, lat]",
+            )
+        lng, lat = coordinate
+        if not isinstance(lng, (int, float)) or not isinstance(lat, (int, float)):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Coordinate at index {index} must contain numeric lng/lat",
+            )
+        lng_value = float(lng)
+        lat_value = float(lat)
+        if lng_value < -180 or lng_value > 180 or lat_value < -90 or lat_value > 90:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Coordinate at index {index} is out of bounds",
+            )
+        normalized_coordinates.append([lng_value, lat_value])
+
+    return normalized_coordinates
 
 
 def clone_json_value(value: Any) -> Any:
@@ -1592,9 +1652,123 @@ async def get_map_overlays(bbox: str):
     return {"projects": overlays}
 
 
+@app.post("/api/routes")
+async def create_tracking_route(payload: SaveRouteRequest):
+    route_name = normalize_route_name(payload.name)
+    drone_id = str(payload.droneId).strip()
+    if not drone_id:
+        raise HTTPException(status_code=422, detail="droneId is required")
+    coordinates = normalize_linestring_coordinates(payload.geometry)
+
+    if payload.points and len(payload.points) < 2:
+        raise HTTPException(status_code=422, detail="points must contain at least 2 items")
+
+    if payload.points and len(payload.points) != len(coordinates):
+        raise HTTPException(
+            status_code=422,
+            detail="points length must match geometry coordinates length",
+        )
+
+    normalized_points = []
+    for index, point in enumerate(payload.points):
+        lng_value = float(point.lng)
+        lat_value = float(point.lat)
+        if lng_value < -180 or lng_value > 180 or lat_value < -90 or lat_value > 90:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Point at index {index} is out of bounds",
+            )
+        normalized_points.append(
+            {
+                "lng": lng_value,
+                "lat": lat_value,
+                "timestamp": int(point.timestamp),
+            }
+        )
+
+    route_id = str(uuid4())
+    saved_at = int(time.time())
+    filename_base = safe_route_filename_part(route_name)
+    filename = f"{saved_at}-{filename_base}-{route_id[:8]}.geojson"
+    full_path = tracked_routes_dir / filename
+    route_feature = {
+        "type": "Feature",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": coordinates,
+        },
+        "properties": {
+            "id": route_id,
+            "name": route_name,
+            "droneId": drone_id,
+            "source": payload.source,
+            "createdAt": saved_at,
+            "savedAt": saved_at,
+            "pointCount": len(coordinates),
+        },
+        "points": normalized_points,
+    }
+
+    async with tracked_route_lock:
+        tracked_routes_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = full_path.with_suffix(".tmp")
+        with temp_path.open("w", encoding="utf-8") as file:
+            json.dump(route_feature, file, ensure_ascii=False, indent=2)
+        temp_path.replace(full_path)
+
+    return {
+        "ok": True,
+        "route": {
+            "id": route_id,
+            "name": route_name,
+            "droneId": drone_id,
+            "source": payload.source,
+            "path": str(full_path.relative_to(data_dir.parent)),
+            "savedAt": saved_at,
+            "pointCount": len(coordinates),
+        },
+    }
+
+
 @app.get("/api/storage/status")
 async def get_storage_status():
     return {"storage": "json", "postgis": False}
+
+
+@app.get("/api/tiles/osm/{z}/{x}/{y}.png")
+async def proxy_osm_tile(z: str, x: str, y: str):
+    try:
+        z_value = int(z)
+        x_value = int(x)
+        y_value = int(y)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid tile coordinates") from exc
+
+    if z_value < 0 or z_value > 22:
+        raise HTTPException(status_code=400, detail="Invalid tile coordinates")
+
+    tile_count = 2 ** z_value
+    if x_value < 0 or x_value >= tile_count or y_value < 0 or y_value >= tile_count:
+        raise HTTPException(status_code=400, detail="Invalid tile coordinates")
+
+    tile_url = f"https://tile.openstreetmap.org/{z_value}/{x_value}/{y_value}.png"
+    request = urllib.request.Request(
+        tile_url,
+        headers={"User-Agent": "mapping-for-drone-spatial-editor/0.1"},
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=15) as tile_response:
+            content_type = tile_response.headers.get("Content-Type", "image/png")
+            tile_bytes = tile_response.read()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Tile proxy upstream fetch failed: {exc}") from exc
+
+    return Response(
+        content=tile_bytes,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 # Mount static files AFTER all routes are defined
 frontend_dist_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")

@@ -12,6 +12,7 @@ interface SpatialCanvasOverlayProps {
   selectedFeatureIds: string[]
   draftCollection: FeatureCollection | null
   snapPreview: SnapPreview | null
+  rotatePreviewByFeatureId?: Record<string, Geometry>
 }
 
 function featureId(feature: Feature) {
@@ -304,6 +305,7 @@ export function SpatialCanvasOverlay({
   selectedFeatureIds,
   draftCollection,
   snapPreview,
+  rotatePreviewByFeatureId = {},
 }: SpatialCanvasOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const visibleFeaturesRef = useRef<Feature[]>(visibleFeatures)
@@ -313,6 +315,7 @@ export function SpatialCanvasOverlay({
   const localDraftFeatureIdsRef = useRef<Set<string>>(new Set(localDraftFeatureIds))
   const draftCollectionRef = useRef<FeatureCollection | null>(draftCollection)
   const snapPreviewRef = useRef<SnapPreview | null>(snapPreview)
+  const rotatePreviewRef = useRef<Record<string, Geometry>>(rotatePreviewByFeatureId)
   const pendingFrameRef = useRef<number | null>(null)
   const scheduleRenderRef = useRef<(() => void) | null>(null)
 
@@ -324,8 +327,9 @@ export function SpatialCanvasOverlay({
     localDraftFeatureIdsRef.current = new Set(localDraftFeatureIds)
     draftCollectionRef.current = draftCollection
     snapPreviewRef.current = snapPreview
+    rotatePreviewRef.current = rotatePreviewByFeatureId
     scheduleRenderRef.current?.()
-  }, [visibleFeatures, selectedFeatureIds, draftMode, publishedFeatures, localDraftFeatureIds, draftCollection, snapPreview])
+  }, [visibleFeatures, selectedFeatureIds, draftMode, publishedFeatures, localDraftFeatureIds, draftCollection, snapPreview, rotatePreviewByFeatureId])
 
   useEffect(() => {
     if (!map) return
@@ -352,6 +356,7 @@ export function SpatialCanvasOverlay({
       const visibleFeatures = visibleFeaturesRef.current
       const lassoDraft = draftModeRef.current === 'delete_lasso'
       const localDraftIds = localDraftFeatureIdsRef.current
+      const rotatePreviewById = rotatePreviewRef.current
       const publishedById = new globalThis.Map(
         publishedFeaturesRef.current
           .map((feature) => [featureId(feature), feature] as const)
@@ -371,10 +376,14 @@ export function SpatialCanvasOverlay({
 
       visibleFeatures.forEach((feature) => {
         const featureStateId = featureId(feature)
+        const previewGeometry = rotatePreviewById[featureStateId]
+        const renderFeature = previewGeometry
+          ? ({ ...feature, geometry: previewGeometry } as Feature)
+          : feature
         drawFeature(
           ctx,
           map,
-          feature,
+          renderFeature,
           selectedSet.has(featureStateId),
           false,
           localDraftIds.has(featureStateId)

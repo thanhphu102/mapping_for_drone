@@ -6,11 +6,15 @@ import { formatBattery, formatCoordinate } from '../utils/format'
 interface DroneTableProps {
   drones: DroneState[]
   isTelemetryOpen: boolean
+  selectedTrackingDroneId: string | null
+  onSelectTrackingDrone: (droneId: string) => void
 }
 
 export const DroneTable = memo(function DroneTable({
   drones,
   isTelemetryOpen,
+  selectedTrackingDroneId,
+  onSelectTrackingDrone,
 }: DroneTableProps) {
   if (drones.length === 0) {
     return (
@@ -53,8 +57,14 @@ export const DroneTable = memo(function DroneTable({
           <tbody className="divide-y divide-slate-100">
             {drones.map((drone) => (
               <tr
-                className="transition-colors hover:bg-sky-50/70"
+                className={`cursor-pointer transition-colors ${
+                  selectedTrackingDroneId === drone.id
+                    ? 'bg-sky-100/80'
+                    : 'hover:bg-sky-50/70'
+                }`}
                 key={drone.id}
+                onClick={() => onSelectTrackingDrone(drone.id)}
+                aria-selected={selectedTrackingDroneId === drone.id}
               >
                 <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">
                   {drone.id}
