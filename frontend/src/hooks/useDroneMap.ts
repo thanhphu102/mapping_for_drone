@@ -6,6 +6,10 @@ import maplibregl, {
 } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { MapTargetDraft } from '../types/drone'
+import {
+  readStoredMainMapCamera,
+  writeStoredMainMapCamera,
+} from '../utils/mainMapCamera'
 
 const rasterOsmStyle: StyleSpecification = {
   version: 8,
@@ -56,11 +60,14 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
       return
     }
 
+    const restoredCamera = readStoredMainMapCamera()
     const mapInstance = new maplibregl.Map({
       container: containerRef.current,
       style: rasterOsmStyle,
-      center: [0, 0],
-      zoom: 2,
+      center: restoredCamera?.center ?? [0, 0],
+      zoom: restoredCamera?.zoom ?? 2,
+      bearing: restoredCamera?.bearing ?? 0,
+      pitch: restoredCamera?.pitch ?? 0,
       fadeDuration: 0,
     })
 
@@ -146,6 +153,15 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
     }
 
     const handleLoad = () => {
+      const savedCamera = readStoredMainMapCamera()
+      if (savedCamera) {
+        mapInstance.jumpTo({
+          center: savedCamera.center,
+          zoom: savedCamera.zoom,
+          bearing: savedCamera.bearing,
+          pitch: savedCamera.pitch,
+        })
+      }
       mapInstance.resize()
       if (debugEl) {
         debugEl.textContent = 'Map: loaded'
@@ -178,18 +194,43 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
       }
     }
 
+    const persistCamera = () => {
+      const center = mapInstance.getCenter()
+      writeStoredMainMapCamera({
+        center: [center.lng, center.lat],
+        zoom: mapInstance.getZoom(),
+        bearing: mapInstance.getBearing(),
+        pitch: mapInstance.getPitch(),
+      })
+    }
+
+    const handleCameraFlushRequest = () => {
+      persistCamera()
+    }
+
     mapInstance.on('load', handleLoad)
     mapInstance.on('click', handleClick)
     mapInstance.on('error', handleError)
+    mapInstance.on('moveend', persistCamera)
+    mapInstance.on('zoomend', persistCamera)
+    mapInstance.on('rotateend', persistCamera)
+    mapInstance.on('pitchend', persistCamera)
     window.addEventListener('resize', handleResize)
+    window.addEventListener('drone:flush-main-map-camera', handleCameraFlushRequest)
     canvas.addEventListener('webglcontextlost', handleWebGlContextLost)
     canvas.addEventListener('webglcontextrestored', handleWebGlContextRestored)
+    persistCamera()
 
     return () => {
       mapInstance.off('load', handleLoad)
       mapInstance.off('click', handleClick)
       mapInstance.off('error', handleError)
+      mapInstance.off('moveend', persistCamera)
+      mapInstance.off('zoomend', persistCamera)
+      mapInstance.off('rotateend', persistCamera)
+      mapInstance.off('pitchend', persistCamera)
       window.removeEventListener('resize', handleResize)
+      window.removeEventListener('drone:flush-main-map-camera', handleCameraFlushRequest)
       canvas.removeEventListener('webglcontextlost', handleWebGlContextLost)
       canvas.removeEventListener('webglcontextrestored', handleWebGlContextRestored)
       mapInstance.remove()

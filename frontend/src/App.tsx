@@ -317,6 +317,7 @@ function App() {
     if (!candidate) {
       return
     }
+    window.dispatchEvent(new Event('drone:flush-main-map-camera'))
 
     setIsOpeningEditor(true)
     setLocationFetch((current) => ({

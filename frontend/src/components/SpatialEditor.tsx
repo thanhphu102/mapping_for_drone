@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Feature, Position } from 'geojson'
+import type { Feature, Geometry, MultiPolygon, Position } from 'geojson'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import { ArrowLeft } from 'lucide-react'
 import type { DrawingProject, ProjectCanvasConfig } from '../types/drone'
@@ -44,6 +44,202 @@ function isEditableEventTarget(target: EventTarget | null) {
     return true
   }
   return Boolean(target.closest('[contenteditable="true"]'))
+}
+
+const GEOMETRY_EPSILON = 1e-9
+
+interface Segment {
+  start: Position
+  end: Position
+}
+
+interface RotateSessionState {
+  featureIds: string[]
+  baseFeatureById: Record<string, Feature>
+  accumulatedAngleDeg: number
+  lastValidAngleDeg: number
+  lastValidGeometryByFeatureId: Record<string, Geometry>
+  boundaryGeometry: MultiPolygon
+}
+
+function almostEqual(a: number, b: number, epsilon = GEOMETRY_EPSILON) {
+  return Math.abs(a - b) <= epsilon
+}
+
+function pointEquals(a: Position, b: Position, epsilon = GEOMETRY_EPSILON) {
+  return almostEqual(a[0], b[0], epsilon) && almostEqual(a[1], b[1], epsilon)
+}
+
+function orientation(a: Position, b: Position, c: Position) {
+  const value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+  if (almostEqual(value, 0)) return 0
+  return value > 0 ? 1 : -1
+}
+
+function pointOnSegment2D(point: Position, a: Position, b: Position, epsilon = GEOMETRY_EPSILON) {
+  if (orientation(a, b, point) !== 0) {
+    return false
+  }
+  return (
+    point[0] >= Math.min(a[0], b[0]) - epsilon &&
+    point[0] <= Math.max(a[0], b[0]) + epsilon &&
+    point[1] >= Math.min(a[1], b[1]) - epsilon &&
+    point[1] <= Math.max(a[1], b[1]) + epsilon
+  )
+}
+
+function pointInRing(point: Position, ring: Position[]) {
+  const [x, y] = point
+  let inside = false
+  let j = ring.length - 1
+  for (let i = 0; i < ring.length; i += 1) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    const intersects = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi || 1e-12) + xi
+    if (intersects) inside = !inside
+    j = i
+  }
+  return inside
+}
+
+function pointOnRing(point: Position, ring: Position[]) {
+  for (let index = 1; index < ring.length; index += 1) {
+    if (pointOnSegment2D(point, ring[index - 1], ring[index])) {
+      return true
+    }
+  }
+  return false
+}
+
+function isPointInsideBaseBoundary(point: Position, boundary: MultiPolygon) {
+  return boundary.coordinates.some((polygon) => {
+    const [outer, ...holes] = polygon
+    const insideOuter = pointInRing(point, outer) || pointOnRing(point, outer)
+    if (!insideOuter) {
+      return false
+    }
+    return !holes.some((hole) => pointInRing(point, hole) || pointOnRing(point, hole))
+  })
+}
+
+function isBoundaryTouchOnlyIntersection(a1: Position, a2: Position, b1: Position, b2: Position) {
+  const touchAtEndpoints =
+    pointEquals(a1, b1) || pointEquals(a1, b2) || pointEquals(a2, b1) || pointEquals(a2, b2)
+  if (touchAtEndpoints) {
+    return true
+  }
+  if (pointOnSegment2D(a1, b1, b2) || pointOnSegment2D(a2, b1, b2)) {
+    return true
+  }
+  if (pointOnSegment2D(b1, a1, a2) || pointOnSegment2D(b2, a1, a2)) {
+    return true
+  }
+  return false
+}
+
+function segmentsProperlyIntersect(a1: Position, a2: Position, b1: Position, b2: Position) {
+  const o1 = orientation(a1, a2, b1)
+  const o2 = orientation(a1, a2, b2)
+  const o3 = orientation(b1, b2, a1)
+  const o4 = orientation(b1, b2, a2)
+
+  const generalIntersection = o1 !== o2 && o3 !== o4
+  if (generalIntersection) {
+    return !isBoundaryTouchOnlyIntersection(a1, a2, b1, b2)
+  }
+
+  if (o1 === 0 && pointOnSegment2D(b1, a1, a2)) return !isBoundaryTouchOnlyIntersection(a1, a2, b1, b2)
+  if (o2 === 0 && pointOnSegment2D(b2, a1, a2)) return !isBoundaryTouchOnlyIntersection(a1, a2, b1, b2)
+  if (o3 === 0 && pointOnSegment2D(a1, b1, b2)) return !isBoundaryTouchOnlyIntersection(a1, a2, b1, b2)
+  if (o4 === 0 && pointOnSegment2D(a2, b1, b2)) return !isBoundaryTouchOnlyIntersection(a1, a2, b1, b2)
+  return false
+}
+
+function geometrySegments(geometry: Geometry): Segment[] {
+  if (geometry.type === 'LineString') {
+    const coords = geometry.coordinates as Position[]
+    const segments: Segment[] = []
+    for (let index = 1; index < coords.length; index += 1) {
+      segments.push({ start: coords[index - 1], end: coords[index] })
+    }
+    return segments
+  }
+  if (geometry.type === 'MultiLineString') {
+    return geometry.coordinates.flatMap((line) => geometrySegments({ type: 'LineString', coordinates: line }))
+  }
+  if (geometry.type === 'Polygon') {
+    return geometry.coordinates.flatMap((ring) => geometrySegments({ type: 'LineString', coordinates: ring }))
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.flatMap((polygon) =>
+      polygon.flatMap((ring) => geometrySegments({ type: 'LineString', coordinates: ring })),
+    )
+  }
+  if (geometry.type === 'GeometryCollection') {
+    return geometry.geometries.flatMap((child) => geometrySegments(child))
+  }
+  return []
+}
+
+function geometryPoints(geometry: Geometry): Position[] {
+  if (geometry.type === 'Point') return [geometry.coordinates as Position]
+  if (geometry.type === 'MultiPoint') return geometry.coordinates as Position[]
+  if (geometry.type === 'LineString') return geometry.coordinates as Position[]
+  if (geometry.type === 'MultiLineString') return geometry.coordinates.flat() as Position[]
+  if (geometry.type === 'Polygon') return geometry.coordinates.flat() as Position[]
+  if (geometry.type === 'MultiPolygon') return geometry.coordinates.flat(2) as Position[]
+  if (geometry.type === 'GeometryCollection') return geometry.geometries.flatMap((child) => geometryPoints(child))
+  return []
+}
+
+function boundaryRingSegments(boundary: MultiPolygon): Segment[] {
+  const segments: Segment[] = []
+  boundary.coordinates.forEach((polygon) => {
+    polygon.forEach((ring) => {
+      for (let index = 1; index < ring.length; index += 1) {
+        segments.push({ start: ring[index - 1], end: ring[index] })
+      }
+    })
+  })
+  return segments
+}
+
+function segmentMidpoint(segment: Segment): Position {
+  return [
+    (segment.start[0] + segment.end[0]) / 2,
+    (segment.start[1] + segment.end[1]) / 2,
+  ]
+}
+
+function geometryInsideBoundaryStrict(geometry: Geometry, boundary: MultiPolygon) {
+  const points = geometryPoints(geometry)
+  if (points.length === 0) {
+    return false
+  }
+  if (!points.every((point) => isPointInsideBaseBoundary(point, boundary))) {
+    return false
+  }
+
+  const candidateSegments = geometrySegments(geometry)
+  const boundarySegments = boundaryRingSegments(boundary)
+  for (const segment of candidateSegments) {
+    if (!isPointInsideBaseBoundary(segmentMidpoint(segment), boundary)) {
+      return false
+    }
+    for (const boundarySegment of boundarySegments) {
+      if (
+        segmentsProperlyIntersect(
+          segment.start,
+          segment.end,
+          boundarySegment.start,
+          boundarySegment.end,
+        )
+      ) {
+        return false
+      }
+    }
+  }
+  return true
 }
 
 const DEFAULT_PROJECT_CONFIG: ProjectCanvasConfig = {
@@ -142,6 +338,12 @@ function InlineTextBoxEditor({
         if (!cancelRef.current) onCommit()
       }}
       onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        cancelRef.current = true
+        onCancel()
+      }}
       onKeyDown={(event) => {
         event.stopPropagation()
         if (event.nativeEvent.isComposing || event.key === 'Process') {
@@ -174,9 +376,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const fittedProjectIdRef = useRef<string | null>(null)
   const modeRef = useRef<DrawMode>('select')
   const snapPreviewRef = useRef<SnapPreview | null>(null)
+  const draftPointsRef = useRef<Position[]>([])
   const selectedFeatureIdsRef = useRef<string[]>([])
   const visibleFeaturesRef = useRef<Feature[]>([])
   const tempFeatureCounterRef = useRef(0)
+  const rotateSessionRef = useRef<RotateSessionState | null>(null)
+  const rotatePreviewRef = useRef<Record<string, Geometry>>({})
+  const rotatePreviewFrameRef = useRef<number | null>(null)
 
   // --- Core state ---
   const [project, setProject] = useState<DrawingProject | null>(null)
@@ -201,6 +407,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [isUpdatingFloor, setIsUpdatingFloor] = useState(false)
   const [textBoxDraft, setTextBoxDraft] = useState<{ start: Position; end: Position; text: string } | null>(null)
   const [boxShapeVariant, setBoxShapeVariant] = useState<BoxShapeVariant | null>(null)
+  const [rotatePreviewByFeatureId, setRotatePreviewByFeatureId] = useState<Record<string, Geometry>>({})
 
   // --- Child project navigation ---
   const [projectStack, setProjectStack] = useState<Array<{ id: string; name: string }>>([])
@@ -278,12 +485,25 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   }, [])
 
   useEffect(() => {
+    return () => {
+      if (rotatePreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(rotatePreviewFrameRef.current)
+        rotatePreviewFrameRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     modeRef.current = mode
   }, [mode])
 
   useEffect(() => {
     snapPreviewRef.current = snapPreview
   }, [snapPreview])
+
+  useEffect(() => {
+    draftPointsRef.current = draftPoints
+  }, [draftPoints])
 
   useEffect(() => {
     selectedFeatureIdsRef.current = selectedFeatureIds
@@ -342,6 +562,18 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const handleMessage = useCallback((msg: string) => {
     setMessage(msg)
   }, [])
+
+  const flushRotatePreview = useCallback(() => {
+    rotatePreviewFrameRef.current = null
+    setRotatePreviewByFeatureId({ ...rotatePreviewRef.current })
+  }, [])
+
+  const scheduleRotatePreviewFlush = useCallback(() => {
+    if (rotatePreviewFrameRef.current !== null) {
+      return
+    }
+    rotatePreviewFrameRef.current = window.requestAnimationFrame(flushRotatePreview)
+  }, [flushRotatePreview])
 
   const handleSnapPreview = useCallback((snap: SnapPreview | null) => {
     setSnapPreview(snap)
@@ -608,21 +840,115 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     setMessage('Move staged in draft')
   }, [])
 
+  const startRotateSession = useCallback((featureIds: string[]) => {
+    if (!project || featureIds.length === 0) {
+      return
+    }
+    const selectedSet = new Set(featureIds)
+    const selected = visibleFeaturesRef.current.filter((feature) => selectedSet.has(featureIdForState(feature)))
+    if (selected.length === 0) {
+      return
+    }
+
+    const baseFeatureById: Record<string, Feature> = {}
+    const lastValidGeometryByFeatureId: Record<string, Geometry> = {}
+    selected.forEach((feature) => {
+      const featureId = featureIdForState(feature)
+      baseFeatureById[featureId] = feature
+      lastValidGeometryByFeatureId[featureId] = feature.geometry as Geometry
+    })
+
+    rotateSessionRef.current = {
+      featureIds: [...featureIds],
+      baseFeatureById,
+      accumulatedAngleDeg: 0,
+      lastValidAngleDeg: 0,
+      lastValidGeometryByFeatureId,
+      boundaryGeometry: project.baseGeometry,
+    }
+    rotatePreviewRef.current = {}
+    scheduleRotatePreviewFlush()
+  }, [featureIdForState, project, scheduleRotatePreviewFlush])
+
+  const applyRotateGestureDelta = useCallback((featureIds: string[], deltaDeg: number) => {
+    const session = rotateSessionRef.current
+    if (!session || featureIds.length === 0) {
+      return { blocked: false }
+    }
+    const sameSelection =
+      featureIds.length === session.featureIds.length &&
+      featureIds.every((id) => session.featureIds.includes(id))
+    if (!sameSelection) {
+      return { blocked: true }
+    }
+
+    const candidateAngle = session.accumulatedAngleDeg + deltaDeg
+    const candidateGeometryByFeatureId: Record<string, Geometry> = {}
+    for (const featureId of session.featureIds) {
+      const baseFeature = session.baseFeatureById[featureId]
+      if (!baseFeature) {
+        return { blocked: true }
+      }
+      const rotated = rotateFeatureGeometry(baseFeature, candidateAngle)
+      const candidateGeometry = rotated.geometry as Geometry
+      if (!geometryInsideBoundaryStrict(candidateGeometry, session.boundaryGeometry)) {
+        session.accumulatedAngleDeg = candidateAngle
+        rotatePreviewRef.current = { ...session.lastValidGeometryByFeatureId }
+        scheduleRotatePreviewFlush()
+        return { blocked: true }
+      }
+      candidateGeometryByFeatureId[featureId] = candidateGeometry
+    }
+
+    session.accumulatedAngleDeg = candidateAngle
+    session.lastValidAngleDeg = candidateAngle
+    session.lastValidGeometryByFeatureId = candidateGeometryByFeatureId
+    rotatePreviewRef.current = candidateGeometryByFeatureId
+    scheduleRotatePreviewFlush()
+    return { blocked: false }
+  }, [scheduleRotatePreviewFlush])
+
+  const endRotateSession = useCallback((featureIds: string[]) => {
+    const session = rotateSessionRef.current
+    if (!session) {
+      return
+    }
+    const sameSelection =
+      featureIds.length === session.featureIds.length &&
+      featureIds.every((id) => session.featureIds.includes(id))
+    if (!sameSelection) {
+      return
+    }
+
+    applyLocalFeatureUpdate(session.featureIds, (feature) => {
+      const featureId = featureIdForState(feature)
+      const geometry = session.lastValidGeometryByFeatureId[featureId]
+      if (!geometry) {
+        return feature
+      }
+      return {
+        ...feature,
+        geometry,
+      }
+    })
+
+    rotateSessionRef.current = null
+    rotatePreviewRef.current = {}
+    scheduleRotatePreviewFlush()
+  }, [applyLocalFeatureUpdate, featureIdForState, scheduleRotatePreviewFlush])
+
   const handleRotateSelected = useCallback((angleDeg: number) => {
-    if (!project || !map || selectedFeatures.length === 0) return
-    const invalidRotation = selectedFeatures.some((feature) =>
-      !featureInsideBoundary(rotateFeatureGeometry(feature, angleDeg), project, map),
-    )
-    if (invalidRotation) {
+    const featureIds = [...selectedFeatureIdsRef.current]
+    if (!project || featureIds.length === 0) return
+    startRotateSession(featureIds)
+    const result = applyRotateGestureDelta(featureIds, angleDeg)
+    endRotateSession(featureIds)
+    if (result.blocked) {
       setMessage('Rotation rejected: feature must stay inside the project base boundary')
       return
     }
-    applyLocalFeatureUpdate(
-      selectedFeatures.map((feature) => featureIdForState(feature)),
-      (feature) => rotateFeatureGeometry(feature, angleDeg),
-    )
     setMessage(`Rotation staged (${angleDeg > 0 ? '+' : ''}${angleDeg}deg)`)
-  }, [applyLocalFeatureUpdate, featureIdForState, map, project, selectedFeatures])
+  }, [applyRotateGestureDelta, endRotateSession, project, startRotateSession])
 
   const selectedBuildingFeature = useMemo(() => {
     if (!project || selectedFeatures.length !== 1) return null
@@ -825,7 +1151,15 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     snapPreviewRef,
     selectedFeatureIdsRef,
     visibleFeaturesRef,
+    draftPointsRef,
     onAddPoint: setDraftPoints,
+    onClearDraftPoints: () => setDraftPoints([]),
+    onClearSnapPreview: () => setSnapPreview(null),
+    onCancelExternalDrafts: () => {
+      if (!textBoxDraft) return false
+      handleCancelTextBox()
+      return true
+    },
     onSaveDraft: handleFinalizeCurrentDraft,
     onMessage: handleMessage,
     onSetSelection: setSelectedFeatureIds,
@@ -833,18 +1167,14 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onMoveFeatures: handleMoveFeatures,
     onMoveEnd: handlePersistMovedFeatures,
     onSetBoxShapeVariant: setBoxShapeVariant,
-    onRotateFeatures: (featureIds, angleDeg) => {
-      if (!project || !map || featureIds.length === 0) return
-      const featureSet = new Set(featureIds)
-      const nextFeatures = visibleFeatures.filter((feature) => featureSet.has(featureIdForState(feature)))
-      const invalidRotation = nextFeatures.some((feature) =>
-        !featureInsideBoundary(rotateFeatureGeometry(feature, angleDeg), project, map),
-      )
-      if (invalidRotation) {
-        setMessage('Rotation rejected: feature must stay inside the project base boundary')
-        return
-      }
-      applyLocalFeatureUpdate(featureIds, (feature) => rotateFeatureGeometry(feature, angleDeg))
+    onRotateGestureStart: (featureIds) => {
+      startRotateSession(featureIds)
+    },
+    onRotateGestureDelta: (featureIds, angleDeg) => {
+      return applyRotateGestureDelta(featureIds, angleDeg)
+    },
+    onRotateGestureEnd: (featureIds) => {
+      endRotateSession(featureIds)
     },
     onQuickCreateTextBox: handleQuickCreateTextBox,
     onCompleteBoxShape: (shapeMode, start, end) => {
@@ -903,6 +1233,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
     const loadProjectData = async () => {
       if (isMountedRef.current) {
+        rotateSessionRef.current = null
+        rotatePreviewRef.current = {}
+        setRotatePreviewByFeatureId({})
         setProject(null)
         setServerFeatures([])
         setPendingCreatedFeatures([])
@@ -1312,6 +1645,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           selectedFeatureIds={selectedFeatureIds}
           draftCollection={draftCollection}
           snapPreview={snapPreview}
+          rotatePreviewByFeatureId={rotatePreviewByFeatureId}
         />
         {textBoxDraft ? (
           <InlineTextBoxEditor
