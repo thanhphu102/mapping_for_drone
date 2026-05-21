@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import type { Feature } from 'geojson'
+import type { SpatialFeature } from '../types'
 import {
   saveDrawingFeature,
   deleteDrawingFeature,
@@ -20,7 +20,7 @@ export function useFeatureActions(projectId: string | null) {
   const isMountedRef = useRef(true)
 
   const saveFeature = useCallback(
-    async (feature: Feature): Promise<Feature | null> => {
+    async (feature: SpatialFeature): Promise<SpatialFeature | null> => {
       if (!projectId) return null
       setState((s) => ({ ...s, saving: true, message: 'Saving feature...' }))
       try {

@@ -2,6 +2,8 @@ import { Building2, Layers3, Search } from 'lucide-react'
 import type { Feature } from 'geojson'
 import type { DrawingProject, SpatialFloor } from '../types'
 import { useState } from 'react'
+import { ImportScanJsonPanel } from './ImportScanJsonPanel'
+import type { ImportPolygonPayload, ImportScanPreviewResponse } from '../services/imports'
 
 interface EditorStructurePanelProps {
   project: DrawingProject | null
@@ -18,6 +20,12 @@ interface EditorStructurePanelProps {
   onUpdateFloor: (floor: SpatialFloor, updates: Partial<Pick<SpatialFloor, 'label' | 'code'>>) => void
   onDeleteFloor: (floor: SpatialFloor) => void
   isUpdatingFloor: boolean
+  importPreview: ImportScanPreviewResponse | null
+  importError: string | null
+  importLoading: boolean
+  onPreviewImport: (polygons: ImportPolygonPayload[]) => Promise<void>
+  onCommitImport: (polygons: ImportPolygonPayload[]) => Promise<void>
+  onUnpreviewImport: () => void
 }
 
 function featureTitle(feature: Feature) {
@@ -45,6 +53,12 @@ export function EditorStructurePanel({
   onUpdateFloor,
   onDeleteFloor,
   isUpdatingFloor,
+  importPreview,
+  importError,
+  importLoading,
+  onPreviewImport,
+  onCommitImport,
+  onUnpreviewImport,
 }: EditorStructurePanelProps) {
   const [editingFloorId, setEditingFloorId] = useState<string | null>(null)
   const [editLabel, setEditLabel] = useState('')
@@ -184,6 +198,18 @@ export function EditorStructurePanel({
             })
           )}
         </div>
+      </section>
+
+      <section className="border-b border-slate-200 px-4 py-3">
+        <ImportScanJsonPanel
+          disabled={!project}
+          preview={importPreview}
+          error={importError}
+          loading={importLoading}
+          onPreview={onPreviewImport}
+          onCommit={onCommitImport}
+          onUnpreview={onUnpreviewImport}
+        />
       </section>
 
       <section className="min-h-0 flex-1 p-4">

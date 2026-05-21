@@ -26,6 +26,31 @@ export interface SpatialFloor {
   sortOrder: number
 }
 
+export interface SpatialObject {
+  id: string
+  name: string
+  sourceKey?: string
+  mode?: EditorMode
+  floors: SpatialFloor[]
+}
+
+export interface SpatialFeatureProperties {
+  featureType?: string
+  floorId?: string | null
+  minZoom?: number
+  maxZoom?: number
+  updatedAt?: number
+  [key: string]: unknown
+}
+
+export interface SpatialFeature extends Feature {
+  id?: string | number
+  projectId?: string
+  objectId?: string
+  floorId?: string | null
+  properties: SpatialFeatureProperties
+}
+
 export interface ProjectSnappingConfig {
   enabled: boolean
   vertex: boolean
@@ -68,12 +93,12 @@ export interface DrawingProject {
   boundaryMinZoom: number
   detailMinZoom: number
   indoorMinZoom: number | null
+  objects?: SpatialObject[]
   floors: SpatialFloor[]
-  features: Feature[]
-  publishedFeatures?: Feature[]
+  features: SpatialFeature[]
+  publishedFeatures?: SpatialFeature[]
   parentProjectId?: string | null
   sourceFeatureId?: string | null
   publishedAt?: number | null
   config?: ProjectCanvasConfig
 }
-

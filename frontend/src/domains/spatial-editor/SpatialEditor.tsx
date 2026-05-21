@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, Geometry, MultiPolygon, Position } from 'geojson'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import { ArrowLeft } from 'lucide-react'
-import type { DrawingProject, ProjectCanvasConfig } from './types'
+import type { DrawingProject, ProjectCanvasConfig, SpatialFeature } from './types'
 import {
   createChildProject,
   fetchDrawingProject,
@@ -35,6 +35,7 @@ import {
 } from './hooks/useDrawingEngine'
 import { useEditorNotices } from './hooks/useEditorNotices'
 import { useFloorManagement } from './hooks/useFloorManagement'
+import { useImportScanJson } from './hooks/useImportScanJson'
 import { usePublishProject } from './hooks/usePublishProject'
 import { geometryInsideBoundaryStrict } from './geometry/validation'
 
@@ -78,6 +79,7 @@ const DEFAULT_PROJECT_CONFIG: ProjectCanvasConfig = {
     precision: 2,
   },
 }
+const DEFAULT_OBJECT_ID = 'object-default'
 
 interface SpatialEditorProps {
   projectId: string
@@ -217,11 +219,20 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [showFloorSelector, setShowFloorSelector] = useState(false)
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<string[]>([])
   const [tagFilter, setTagFilter] = useState('')
+  const [importPreviewFeatures, setImportPreviewFeatures] = useState<Feature[]>([])
   const [inspectorDraft, setInspectorDraft] = useState({ name: '', tag: '', noteText: '' })
   const [isSavingInspector, setIsSavingInspector] = useState(false)
   const [textBoxDraft, setTextBoxDraft] = useState<{ start: Position; end: Position; text: string } | null>(null)
   const [boxShapeVariant, setBoxShapeVariant] = useState<BoxShapeVariant | null>(null)
   const [rotatePreviewByFeatureId, setRotatePreviewByFeatureId] = useState<Record<string, Geometry>>({})
+  const {
+    preview: importPreview,
+    error: importError,
+    loading: importLoading,
+    previewImport,
+    commitImport,
+    clearPreview: clearImportPreview,
+  } = useImportScanJson()
 
   // --- Child project navigation ---
   const [projectStack, setProjectStack] = useState<Array<{ id: string; name: string }>>([])
@@ -407,18 +418,34 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   const buildFeatureForStorage = useCallback((feature: Feature, featureType: string) => {
     if (!project) return null
+    const featureRecord = feature as SpatialFeature
+    const minZoomValue = Number(
+      (feature.properties as Record<string, unknown> | undefined)?.minZoom
+        ?? project.boundaryMinZoom,
+    )
+    const maxZoomValue = Number(
+      (feature.properties as Record<string, unknown> | undefined)?.maxZoom
+        ?? 24,
+    )
+    const currentFloorId = featureRecord.floorId
+      ?? (feature.properties as Record<string, unknown> | undefined)?.floorId
+      ?? selectedFloorId
+      ?? null
     return {
       ...feature,
+      projectId: project.id,
+      objectId: featureRecord.objectId ?? DEFAULT_OBJECT_ID,
+      floorId: currentFloorId,
       properties: {
         ...(feature.properties ?? {}),
         featureType,
         tag: String((feature.properties as Record<string, unknown> | undefined)?.tag ?? ''),
         noteText: String((feature.properties as Record<string, unknown> | undefined)?.noteText ?? ''),
-        minZoom: (feature.properties as Record<string, unknown> | undefined)?.minZoom ?? project.boundaryMinZoom,
-        maxZoom: (feature.properties as Record<string, unknown> | undefined)?.maxZoom ?? 24,
-        floorId: (feature.properties as Record<string, unknown> | undefined)?.floorId ?? selectedFloorId ?? null,
+        minZoom: Number.isFinite(minZoomValue) ? minZoomValue : project.boundaryMinZoom,
+        maxZoom: Number.isFinite(maxZoomValue) ? maxZoomValue : 24,
+        floorId: currentFloorId,
       },
-    } as Feature
+    } as SpatialFeature
   }, [project, selectedFloorId])
 
   const buildFinalFeatureFromPoints = useCallback((
@@ -539,7 +566,11 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       )
       const savedUpdated = await Promise.all(
         updatedFeatures.map(async (feature) => {
-          const response = await saveDrawingFeature(project.id, feature)
+          const featureCopy: SpatialFeature = {
+            ...(feature as SpatialFeature),
+            properties: { ...((feature.properties ?? {}) as Record<string, unknown>) },
+          }
+          const response = await saveDrawingFeature(project.id, featureCopy)
           return response.feature
         }),
       )
@@ -808,12 +839,16 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         selectedFeatures.map((feature) => featureIdForState(feature)),
         (feature) => ({
           ...feature,
+          floorId: (feature as SpatialFeature).floorId ?? selectedFloorId ?? null,
           properties: {
             ...(feature.properties ?? {}),
             ...(selectedFeatures.length === 1 ? { name: inspectorDraft.name } : {}),
             tag: inspectorDraft.tag,
             noteText: inspectorDraft.noteText,
-            floorId: (feature.properties as Record<string, unknown> | undefined)?.floorId ?? selectedFloorId ?? null,
+            floorId: (feature as SpatialFeature).floorId
+              ?? (feature.properties as Record<string, unknown> | undefined)?.floorId
+              ?? selectedFloorId
+              ?? null,
           },
         }),
       )
@@ -828,6 +863,72 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       }
     }
   }, [applyLocalFeatureUpdate, featureIdForState, inspectorDraft.name, inspectorDraft.noteText, inspectorDraft.tag, selectedFeatures, selectedFloorId, setMessage])
+
+  const handlePreviewImport = useCallback(async (polygons: {
+    name?: string
+    externalId?: string
+    tag?: string
+    note?: string
+    coordinates: [number, number][]
+  }[]) => {
+    if (!project) {
+      setMessage('Project is not loaded')
+      return
+    }
+    const preview = await previewImport({
+      projectId: project.id,
+      objectId: DEFAULT_OBJECT_ID,
+      floorId: selectedFloorId,
+      polygons,
+    })
+    setImportPreviewFeatures(Array.isArray(preview.previewFeatures) ? preview.previewFeatures as Feature[] : [])
+    setMessage('Import preview ready')
+  }, [previewImport, project, selectedFloorId, setMessage])
+
+  const handleCommitImport = useCallback(async (polygons: {
+    name?: string
+    externalId?: string
+    tag?: string
+    note?: string
+    coordinates: [number, number][]
+  }[]) => {
+    if (!project) {
+      setMessage('Project is not loaded')
+      return
+    }
+    const result = await commitImport({
+      projectId: project.id,
+      objectId: DEFAULT_OBJECT_ID,
+      floorId: selectedFloorId,
+      polygons,
+    })
+    if (result?.floorId) {
+      setSelectedFloorId(result.floorId)
+    }
+    const upsert = result?.changes?.features?.upsert
+    if (Array.isArray(upsert) && upsert.length > 0) {
+      setServerFeatures((current) => {
+        const byId = new Map<string, Feature>()
+        current.forEach((feature) => byId.set(featureIdForState(feature), feature))
+        upsert.forEach((item) => {
+          if (item && typeof item === 'object') {
+            const feature = item as Feature
+            byId.set(featureIdForState(feature), feature)
+          }
+        })
+        return Array.from(byId.values())
+      })
+    }
+    setImportPreviewFeatures([])
+    clearImportPreview()
+    setMessage(`Import committed (${result.validRooms}/${result.detectedRooms} valid)`)
+  }, [clearImportPreview, commitImport, featureIdForState, project, selectedFloorId, setMessage, setSelectedFloorId])
+
+  const handleUnpreviewImport = useCallback(() => {
+    setImportPreviewFeatures([])
+    clearImportPreview()
+    setMessage('Preview hidden')
+  }, [clearImportPreview, setMessage])
 
   const handleStartTextBox = useCallback((start: Position, end: Position) => {
     setTextBoxDraft({ start, end, text: '' })
@@ -855,6 +956,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       const nextTextFeature = {
         type: 'Feature',
         id: makeDraftFeatureId(),
+        projectId: project.id,
+        objectId: DEFAULT_OBJECT_ID,
+        floorId: selectedFloorId ?? null,
         geometry: { type: 'Polygon', coordinates: [[p1, p2, p3, p4, p1]] },
         properties: {
           featureType: 'text_label',
@@ -872,7 +976,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           minZoom: project.boundaryMinZoom,
           maxZoom: 24,
         },
-      } as Feature
+      } as SpatialFeature
       if (!featureInsideBoundary(nextTextFeature, project, map)) {
         setMessage('Text box rejected: it must stay inside the project base boundary')
         return
@@ -1343,6 +1447,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         onUpdateFloor={handleUpdateFloor}
         onDeleteFloor={handleDeleteFloor}
         isUpdatingFloor={isUpdatingFloor}
+        importPreview={importPreview}
+        importError={importError}
+        importLoading={importLoading}
+        onPreviewImport={handlePreviewImport}
+        onCommitImport={handleCommitImport}
+        onUnpreviewImport={handleUnpreviewImport}
       />
 
       <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-200">
@@ -1364,6 +1474,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           map={map}
           draftMode={mode}
           visibleFeatures={visibleFeatures}
+          previewFeatures={importPreviewFeatures}
           publishedFeatures={project?.publishedFeatures ?? []}
           localDraftFeatureIds={localDraftFeatureIds}
           selectedFeatureIds={selectedFeatureIds}

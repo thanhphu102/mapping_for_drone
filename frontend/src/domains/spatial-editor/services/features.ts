@@ -1,14 +1,14 @@
-import type { Feature } from 'geojson'
+import type { SpatialFeature } from '../types'
 import { readJsonResponse } from './api'
 
 export async function fetchDrawingProjectFeatures(
   projectId: string,
   signal?: AbortSignal,
-): Promise<Feature[]> {
+): Promise<SpatialFeature[]> {
   const response = await fetch(`/api/drawing-projects/${projectId}/features`, {
     signal,
   })
-  const data = await readJsonResponse<{ features: Feature[] }>(response)
+  const data = await readJsonResponse<{ features: SpatialFeature[] }>(response)
   return data.features
 }
 
@@ -21,7 +21,7 @@ export async function fetchProjectVisibleFeatures(
     floorId?: string | null
   },
   signal?: AbortSignal,
-): Promise<Feature[]> {
+): Promise<SpatialFeature[]> {
   const params = new URLSearchParams({
     projectId: payload.projectId,
     bbox: payload.bbox.join(','),
@@ -34,14 +34,14 @@ export async function fetchProjectVisibleFeatures(
     params.set('floorId', payload.floorId)
   }
   const response = await fetch(`/api/map-features?${params.toString()}`, { signal })
-  const data = await readJsonResponse<{ features: Feature[] }>(response)
+  const data = await readJsonResponse<{ features: SpatialFeature[] }>(response)
   return data.features
 }
 
 export async function saveDrawingFeature(
   projectId: string,
-  feature: Feature,
-): Promise<{ ok: boolean; feature: Feature }> {
+  feature: SpatialFeature,
+): Promise<{ ok: boolean; feature: SpatialFeature }> {
   const response = await fetch(`/api/drawing-projects/${projectId}/features`, {
     method: 'POST',
     headers: {
@@ -49,7 +49,7 @@ export async function saveDrawingFeature(
     },
     body: JSON.stringify({ feature }),
   })
-  return readJsonResponse<{ ok: boolean; feature: Feature }>(response)
+  return readJsonResponse<{ ok: boolean; feature: SpatialFeature }>(response)
 }
 
 export async function deleteDrawingFeature(
@@ -62,4 +62,3 @@ export async function deleteDrawingFeature(
   )
   return readJsonResponse<{ ok: boolean }>(response)
 }
-

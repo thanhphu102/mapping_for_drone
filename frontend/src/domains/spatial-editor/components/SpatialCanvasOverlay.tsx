@@ -7,6 +7,7 @@ interface SpatialCanvasOverlayProps {
   map: Map | null
   draftMode?: string | null
   visibleFeatures: Feature[]
+  previewFeatures?: Feature[]
   publishedFeatures?: Feature[]
   localDraftFeatureIds?: string[]
   selectedFeatureIds: string[]
@@ -33,6 +34,9 @@ function variantStyle(variant: RenderVariant, lassoDraft: boolean) {
   }
   if (variant === 'published') {
     return { fill: 'rgba(168,85,247,0.18)', stroke: '#7e22ce', lineWidth: 2.75 }
+  }
+  if (variant === 'saved-draft') {
+    return { fill: 'rgba(239,68,68,0.16)', stroke: '#dc2626', lineWidth: 2.75 }
   }
   return { fill: 'rgba(239,68,68,0.16)', stroke: '#dc2626', lineWidth: 2.75 }
 }
@@ -300,6 +304,7 @@ export function SpatialCanvasOverlay({
   map,
   draftMode = null,
   visibleFeatures,
+  previewFeatures = [],
   publishedFeatures = [],
   localDraftFeatureIds = [],
   selectedFeatureIds,
@@ -309,6 +314,7 @@ export function SpatialCanvasOverlay({
 }: SpatialCanvasOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const visibleFeaturesRef = useRef<Feature[]>(visibleFeatures)
+  const previewFeaturesRef = useRef<Feature[]>(previewFeatures)
   const selectedSetRef = useRef<Set<string>>(new Set(selectedFeatureIds))
   const draftModeRef = useRef<string | null>(draftMode)
   const publishedFeaturesRef = useRef<Feature[]>(publishedFeatures)
@@ -321,6 +327,7 @@ export function SpatialCanvasOverlay({
 
   useEffect(() => {
     visibleFeaturesRef.current = visibleFeatures
+    previewFeaturesRef.current = previewFeatures
     selectedSetRef.current = new Set(selectedFeatureIds)
     draftModeRef.current = draftMode
     publishedFeaturesRef.current = publishedFeatures
@@ -329,7 +336,7 @@ export function SpatialCanvasOverlay({
     snapPreviewRef.current = snapPreview
     rotatePreviewRef.current = rotatePreviewByFeatureId
     scheduleRenderRef.current?.()
-  }, [visibleFeatures, selectedFeatureIds, draftMode, publishedFeatures, localDraftFeatureIds, draftCollection, snapPreview, rotatePreviewByFeatureId])
+  }, [visibleFeatures, previewFeatures, selectedFeatureIds, draftMode, publishedFeatures, localDraftFeatureIds, draftCollection, snapPreview, rotatePreviewByFeatureId])
 
   useEffect(() => {
     if (!map) return
@@ -392,6 +399,10 @@ export function SpatialCanvasOverlay({
               ? 'published'
               : 'saved-draft',
         )
+      })
+
+      previewFeaturesRef.current.forEach((feature) => {
+        drawFeature(ctx, map, feature, false, false, 'in-progress')
       })
 
       if (selectedIds.length === 1) {

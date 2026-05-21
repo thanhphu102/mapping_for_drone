@@ -44,7 +44,11 @@ export function projectsToFeatureCollection(
         .filter((feature) => {
           if (!selectedProjectId || project.id !== selectedProjectId) return true
           if (!selectedFloorId) return true
-          const floorId = String((feature.properties as Record<string, unknown> | undefined)?.floorId ?? '')
+          const floorId = String(
+            (feature as { floorId?: unknown }).floorId
+              ?? (feature.properties as Record<string, unknown> | undefined)?.floorId
+              ?? '',
+          )
           return floorId === selectedFloorId
         })
         .map((feature) => ({
