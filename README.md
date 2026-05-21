@@ -12,16 +12,16 @@ For architecture, internal references, and feature-development guides, see:
 
 **One command to start everything:**
 ```bash
-./run_dev.sh              # 3 drones on port 9002 (auto-kills old processes)
+./run_dev.sh              # 3 drones, backend 9002, frontend 5173
 ./run_dev.sh 5            # 5 drones
-./run_dev.sh 5 8000       # 5 drones on port 8000
+./run_dev.sh 5 8000 5174  # 5 drones, backend 8000, frontend 5174
 ```
 
-Then open your browser to **http://127.0.0.1:9002**
+Then open your browser to **http://127.0.0.1:5173**
 
 Features:
 - ✅ Auto-kills any old processes for fresh start
-- ✅ Starts backend + drone simulators
+- ✅ Starts backend + Vite frontend + drone simulators
 - ✅ No separate setup needed (uses existing venv)
 - ✅ Ctrl+C to stop all services cleanly
 
@@ -36,17 +36,22 @@ pip install -r requirements.txt
 
 2. Start the backend:
 ```bash
-cd backend
-uvicorn main:app --reload --host 127.0.0.1 --port 9002
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 9002
 ```
 
-3. In another terminal, run drone simulator(s):
+3. In another terminal, start the frontend:
+```bash
+cd frontend
+VITE_BACKEND_TARGET=http://127.0.0.1:9002 npm run dev
+```
+
+4. In another terminal, run drone simulator(s):
 ```bash
 python3 drone_sim.py --id drone1 --port 9002
 python3 drone_sim.py --id drone2 --port 9002  # add more drones
 ```
 
-4. Open http://127.0.0.1:9002 in your browser.
+5. Open http://127.0.0.1:5173 in your browser.
 
 ## Features
 

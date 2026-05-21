@@ -1,4 +1,3 @@
-import { SpatialEditor } from '../../components/SpatialEditor'
+import { SpatialEditor } from './SpatialEditor'
 
 export default SpatialEditor
-

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Dev runner for React frontend + backend + drone simulators
+# Dev runner for Vite frontend + backend + drone simulators
 # Usage: ./run_dev.sh [--no-install] [num_drones] [backend_port] [frontend_port]
 # Examples:
-#   ./run_dev.sh              # 3 drones, backend 9002
+#   ./run_dev.sh              # 3 drones, backend 9002, frontend 5173
 #   ./run_dev.sh 5            # 5 drones, backend 9002
-#   ./run_dev.sh 5 8000       # 5 drones, backend 8000
+#   ./run_dev.sh 5 8000 5174  # 5 drones, backend 8000, frontend 5174
 #   ./run_dev.sh --no-install # Skip npm install step
 
 set -u
@@ -16,6 +16,7 @@ INTERVAL="1.0"
 NO_INSTALL=0
 CLEANED_UP=0
 BACKEND_PID=""
+FRONTEND_PID=""
 DRONE_PIDS=()
 
 POSITIONAL_ARGS=()
@@ -29,6 +30,7 @@ done
 
 NUM_DRONES=${POSITIONAL_ARGS[0]:-3}
 BACKEND_PORT=${POSITIONAL_ARGS[1]:-9002}
+FRONTEND_PORT=${POSITIONAL_ARGS[2]:-5173}
 
 port_in_use() {
   local port="$1"
@@ -95,6 +97,10 @@ cleanup() {
     kill "$BACKEND_PID" 2>/dev/null || true
   fi
 
+  if [ -n "$FRONTEND_PID" ]; then
+    kill "$FRONTEND_PID" 2>/dev/null || true
+  fi
+
   for pid in "${DRONE_PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
@@ -115,15 +121,18 @@ fi
 
 echo "🛑 Cleaning up old processes..."
 # Kill only this app's known processes (for this host/ports)
+pkill -f "uvicorn backend.app.main:app --host $HOST --port $BACKEND_PORT" 2>/dev/null || true
 pkill -f "uvicorn backend.main:app --host $HOST --port $BACKEND_PORT" 2>/dev/null || true
 pkill -f "drone_sim.py --host $HOST --port $BACKEND_PORT" 2>/dev/null || true
+pkill -f "vite.*--host $HOST.*--port $FRONTEND_PORT" 2>/dev/null || true
 sleep 2
 
 wait_for_port_release "$BACKEND_PORT" "backend"
+wait_for_port_release "$FRONTEND_PORT" "frontend"
 
 echo "🚀 Starting Swarm GSC Dev Environment"
 echo "   Backend API: http://$HOST:$BACKEND_PORT"
-echo "   Frontend UI: http://$HOST:$BACKEND_PORT"
+echo "   Frontend UI: http://$HOST:$FRONTEND_PORT"
 echo "   Drones: $NUM_DRONES"
 if [ "$NO_INSTALL" -eq 1 ]; then
   echo "   Frontend deps install: skipped (--no-install)"
@@ -134,8 +143,8 @@ echo
 export PYTHONDONTWRITEBYTECODE=1
 source "$VENV_DIR/bin/activate"
 
-# Build frontend
-echo "🎨 Building frontend..."
+# Prepare frontend
+echo "🎨 Preparing frontend..."
 cd "$PROJECT_DIR/frontend"
 if [ "$NO_INSTALL" -eq 1 ] && [ ! -d "$PROJECT_DIR/frontend/node_modules" ]; then
   echo "❌ --no-install was set, but frontend/node_modules does not exist"
@@ -154,22 +163,25 @@ else
   fi
 fi
 
-# Build the frontend
-echo "📦 Running npm run build..."
-npm run build
-if [ $? -ne 0 ]; then
-  echo "❌ Frontend build failed"
-  exit 1
-fi
-
 # Start backend
 echo "📡 Starting backend..."
 cd "$PROJECT_DIR"
-"$VENV_DIR/bin/python" -m uvicorn backend.main:app --host "$HOST" --port "$BACKEND_PORT" --reload &
+"$VENV_DIR/bin/python" -m uvicorn backend.app.main:app --host "$HOST" --port "$BACKEND_PORT" --reload &
 BACKEND_PID=$!
 
 # Wait for backend to be ready
 if ! wait_for_port_ready "$BACKEND_PORT" "Backend"; then
+  exit 1
+fi
+
+# Start frontend
+echo "🖥️  Starting frontend..."
+cd "$PROJECT_DIR/frontend"
+VITE_DEV_HOST="$HOST" VITE_DEV_PORT="$FRONTEND_PORT" VITE_BACKEND_TARGET="http://$HOST:$BACKEND_PORT" npm run dev &
+FRONTEND_PID=$!
+
+# Wait for frontend to be ready
+if ! wait_for_port_ready "$FRONTEND_PORT" "Frontend"; then
   exit 1
 fi
 
@@ -190,6 +202,10 @@ while true; do
   # Check if backend died unexpectedly
   if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
     echo "⚠️  Backend crashed, stopping all services..."
+    exit 1
+  fi
+  if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    echo "⚠️  Frontend crashed, stopping all services..."
     exit 1
   fi
 done

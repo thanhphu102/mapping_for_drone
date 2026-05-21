@@ -8,7 +8,17 @@ export async function fetchOsmElementGeometry(
   osmId: number,
 ): Promise<OsmElementGeometryResponse> {
   const response = await fetch(`/api/osm/elements/${osmType}/${osmId}/geometry`)
-  return readJsonResponse<OsmElementGeometryResponse>(response)
+  const data = await readJsonResponse<OsmElementGeometryResponse | null>(response)
+
+  if (!data || typeof data !== 'object') {
+    throw new Error('OSM geometry response is empty')
+  }
+
+  if (!data.geometry || !data.editorMode) {
+    throw new Error('OSM geometry response is incomplete')
+  }
+
+  return data
 }
 
 export async function createDrawingProjectFromOsm(
@@ -180,4 +190,3 @@ export async function fetchChildProjects(
 ): Promise<DrawingProject[]> {
   return fetchDrawingProjects({ parentProjectId: projectId })
 }
-

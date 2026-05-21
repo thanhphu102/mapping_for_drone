@@ -230,6 +230,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-.codex
-.vscode
-.agents
+
+# Local editor and agent tooling
+.agent/
+.agents/
+.codex/
+.vscode/

@@ -1,0 +1,1 @@
+export { geometryInsideBoundaryStrict } from './validation'
