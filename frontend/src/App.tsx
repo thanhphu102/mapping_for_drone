@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, MapPinned } from 'lucide-react'
 import { DroneMap } from './components/DroneMap'
 import { OsmEnclosingPanel } from './components/OsmEnclosingPanel'
-import { SpatialEditor } from './components/SpatialEditor'
 import { DroneTable } from './components/DroneTable'
 import { DroneTrackingControls } from './components/DroneTrackingControls'
 import { Notice, type NoticeState } from './components/Notice'
 import { StatusStrip } from './components/StatusStrip'
 import { useCommandDispatch } from './hooks/useCommandDispatch'
 import { useDroneTelemetry } from './hooks/useDroneTelemetry'
-import {
-  fetchEnclosingOsmElements,
-  fetchOsmElementFull,
-} from './services/osm'
+import { fetchEnclosingOsmElements } from './services/osm'
 import {
   createDrawingProjectFromOsm,
   fetchDrawingProjects,
@@ -28,6 +24,10 @@ import type {
   SaveTrackedRouteResponse,
 } from './types/drone'
 import { formatDroneList } from './utils/format'
+
+const SpatialEditorPage = lazy(
+  () => import('./domains/spatial-editor/SpatialEditorPage'),
+)
 
 type LocationFetchStatus =
   | 'idle'
@@ -364,35 +364,7 @@ function App() {
     }))
 
     try {
-      const [fullData, selectedGeometry] = await Promise.all([
-        fetchOsmElementFull(candidate.type, candidate.id),
-        fetchOsmElementGeometry(candidate.type, candidate.id),
-      ])
-      console.log('OSM element type:', candidate.type)
-      console.log('OSM element id:', candidate.id)
-      console.log('OSM full JSON:', fullData)
-
-      try {
-        const debugResponse = await fetch('/debug/osm-selection', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            type: candidate.type,
-            id: candidate.id,
-            full: fullData,
-          }),
-        })
-
-        if (!debugResponse.ok) {
-          console.warn(
-            `Debug OSM selection log failed with HTTP ${debugResponse.status}`,
-          )
-        }
-      } catch (debugError) {
-        console.warn('Debug OSM selection log failed:', debugError)
-      }
+      const selectedGeometry = await fetchOsmElementGeometry(candidate.type, candidate.id)
 
       setLocationFetch((current) => ({
         ...current,
@@ -496,12 +468,14 @@ function App() {
 
   if (spatialEditorMatch) {
     return (
-      <SpatialEditor
-        projectId={spatialEditorMatch[1]}
-        onBack={() => {
-          window.location.assign('/')
-        }}
-      />
+      <Suspense fallback={<div className="p-4">Loading spatial editor...</div>}>
+        <SpatialEditorPage
+          projectId={spatialEditorMatch[1]}
+          onBack={() => {
+            window.location.assign('/')
+          }}
+        />
+      </Suspense>
     )
   }
 
