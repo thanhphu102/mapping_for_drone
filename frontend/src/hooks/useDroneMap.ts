@@ -8,8 +8,42 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import type { MapTargetDraft } from '../types/drone'
 import {
   readStoredMainMapCamera,
+  type StoredMainMapCamera,
   writeStoredMainMapCamera,
 } from '../utils/mainMapCamera'
+
+export const VIETNAM_MAP_CENTER: [number, number] = [108.2772, 14.0583]
+export const VIETNAM_DEFAULT_ZOOM = 5.15
+export const VIETNAM_FOCUS_ZOOM = 5.55
+
+const legacyNullIslandCamera = {
+  center: [0, 0] as [number, number],
+  zoom: 2,
+}
+
+function isLegacyNullIslandCamera(camera: StoredMainMapCamera | null) {
+  if (!camera) return false
+  const [lng, lat] = camera.center
+  return (
+    Math.abs(lng - legacyNullIslandCamera.center[0]) < 0.000001 &&
+    Math.abs(lat - legacyNullIslandCamera.center[1]) < 0.000001 &&
+    Math.abs(camera.zoom - legacyNullIslandCamera.zoom) < 0.05
+  )
+}
+
+function initialMainMapCamera(): StoredMainMapCamera {
+  const restoredCamera = readStoredMainMapCamera()
+  if (restoredCamera && !isLegacyNullIslandCamera(restoredCamera)) {
+    return restoredCamera
+  }
+
+  return {
+    center: VIETNAM_MAP_CENTER,
+    zoom: VIETNAM_DEFAULT_ZOOM,
+    bearing: 0,
+    pitch: 0,
+  }
+}
 
 const rasterOsmStyle: StyleSpecification = {
   version: 8,
@@ -50,6 +84,7 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
   const mapRef = useRef<Map | null>(null)
   const onTargetSelectRef = useRef(onTargetSelect)
   const [map, setMap] = useState<Map | null>(null)
+  const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
     onTargetSelectRef.current = onTargetSelect
@@ -60,37 +95,18 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
       return
     }
 
-    const restoredCamera = readStoredMainMapCamera()
+    const initialCamera = initialMainMapCamera()
     const mapInstance = new maplibregl.Map({
       container: containerRef.current,
       style: rasterOsmStyle,
-      center: restoredCamera?.center ?? [0, 0],
-      zoom: restoredCamera?.zoom ?? 2,
-      bearing: restoredCamera?.bearing ?? 0,
-      pitch: restoredCamera?.pitch ?? 0,
+      center: initialCamera.center,
+      zoom: initialCamera.zoom,
+      bearing: initialCamera.bearing,
+      pitch: initialCamera.pitch,
       fadeDuration: 0,
     })
 
     const maplibreInfo = maplibregl as MapLibreWithSupport
-    console.info('maplibre-gl version:', maplibreInfo.version)
-
-    // Create a small debug overlay inside the map container to surface status
-    let debugEl: HTMLDivElement | null = null
-    if (containerRef.current) {
-      debugEl = document.createElement('div')
-      debugEl.style.position = 'absolute'
-      debugEl.style.zIndex = '40'
-      debugEl.style.top = '1rem'
-      debugEl.style.right = '1rem'
-      debugEl.style.padding = '0.5rem 0.75rem'
-      debugEl.style.background = 'rgba(2,6,23,0.7)'
-      debugEl.style.color = 'white'
-      debugEl.style.borderRadius = '8px'
-      debugEl.style.fontSize = '12px'
-      debugEl.style.pointerEvents = 'none'
-      debugEl.textContent = 'Map: creating...'
-      containerRef.current.appendChild(debugEl)
-    }
 
     // Robust WebGL detection: try MapLibre supported() when available; otherwise
     // create a temporary canvas and probe getContext('webgl2'|'webgl'|'experimental-webgl')
@@ -114,10 +130,8 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
       }
     }
 
-    // Log and show support status
-    console.info('MapLibre supported (WebGL available):', webglSupported)
-    if (debugEl) {
-      debugEl.textContent = `Map: init (WebGL=${String(webglSupported)})`
+    if (!webglSupported) {
+      setMapStatus('error')
     }
 
     // Ensure container and reasonable ancestors have height so map can render.
@@ -125,10 +139,8 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
     // result in a 0px height. We only set inline styles when computed height is 0.
     try {
       let el: HTMLElement | null = containerRef.current
-      const stack: Array<{ tag: string; h: number }> = []
       while (el && el !== document.body && el !== document.documentElement) {
         const rect = el.getBoundingClientRect()
-        stack.push({ tag: el.tagName.toLowerCase(), h: Math.round(rect.height) })
         if (rect.height === 0) {
           // set a fallback height; prefer percentage so it stretches with layout
           el.style.minHeight = el.style.minHeight || '420px'
@@ -136,7 +148,6 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
         }
         el = el.parentElement
       }
-      console.info('Map container ancestor heights:', stack)
     } catch {
       // ignore
     }
@@ -163,9 +174,7 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
         })
       }
       mapInstance.resize()
-      if (debugEl) {
-        debugEl.textContent = 'Map: loaded'
-      }
+      setMapStatus('ready')
     }
 
     const handleResize = () => {
@@ -189,9 +198,7 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
     const handleError = (event: unknown) => {
       const maybeError = event as { error?: unknown; sourceId?: string }
       console.error('MapLibre runtime error:', maybeError)
-      if (debugEl) {
-        debugEl.textContent = `Map: error ${String(maybeError?.error ?? maybeError)}`
-      }
+      setMapStatus('error')
     }
 
     const persistCamera = () => {
@@ -235,11 +242,13 @@ export function useDroneMap(onTargetSelect: (target: MapTargetDraft) => void) {
       canvas.removeEventListener('webglcontextrestored', handleWebGlContextRestored)
       mapInstance.remove()
       mapRef.current = null
+      setMap(null)
     }
   }, [])
 
   return {
     containerRef,
     map,
+    mapStatus,
   }
 }

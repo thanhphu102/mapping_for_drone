@@ -25,6 +25,22 @@ function connectionLabel(status: ConnectionStatus) {
   return 'Closed'
 }
 
+function commandStatusLabel(status: CommandDispatchStatus) {
+  if (status === 'sending') {
+    return 'Sending'
+  }
+
+  if (status === 'success') {
+    return 'Sent'
+  }
+
+  if (status === 'error') {
+    return 'Error'
+  }
+
+  return 'Ready'
+}
+
 export function StatusStrip({
   connectionStatus,
   connectionMessage,
@@ -34,6 +50,11 @@ export function StatusStrip({
 }: StatusStripProps) {
   const isOnline = connectionStatus === 'open'
   const ConnectionIcon = isOnline ? Wifi : WifiOff
+  const connectionTone = isOnline
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    : connectionStatus === 'connecting'
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : 'border-rose-200 bg-rose-50 text-rose-700'
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -45,7 +66,7 @@ export function StatusStrip({
           />
           Telemetry
         </div>
-        <div className="mt-2 text-lg font-semibold text-slate-950">
+        <div className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-sm font-semibold ${connectionTone}`}>
           {connectionLabel(connectionStatus)}
         </div>
         <p className="mt-1 truncate text-xs text-slate-500" title={connectionMessage}>
@@ -80,8 +101,8 @@ export function StatusStrip({
           <Send className="size-4 text-sky-600" aria-hidden="true" />
           Command
         </div>
-        <div className="mt-2 text-lg font-semibold capitalize text-slate-950">
-          {commandStatus}
+        <div className="mt-2 text-lg font-semibold text-slate-950">
+          {commandStatusLabel(commandStatus)}
         </div>
         <p className="mt-1 text-xs text-slate-500">Map target flow</p>
       </div>

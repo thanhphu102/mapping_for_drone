@@ -16,6 +16,7 @@ import {
 } from './services/spatial'
 import type {
   CommandTarget,
+  CommandDispatchStatus,
   EditorMode,
   DroneState,
   MapTargetDraft,
@@ -57,6 +58,22 @@ const initialLocationFetchState: LocationFetchState = {
   highlightedCandidate: null,
   selectedGeometry: null,
   message: null,
+}
+
+function commandStatusLabel(status: CommandDispatchStatus) {
+  if (status === 'sending') {
+    return 'Sending'
+  }
+
+  if (status === 'success') {
+    return 'Sent'
+  }
+
+  if (status === 'error') {
+    return 'Error'
+  }
+
+  return 'Ready'
 }
 
 function canHighlightCandidate(candidate: OsmCandidate): boolean {
@@ -505,7 +522,7 @@ function App() {
           />
         </main>
 
-        <aside className="flex max-h-[45dvh] w-full flex-col border-t border-slate-200 bg-slate-100 lg:h-full lg:max-h-none lg:w-[460px] lg:border-l lg:border-t-0">
+        <aside className="flex max-h-[45dvh] w-full flex-col border-t border-slate-200 bg-slate-50 lg:h-full lg:max-h-none lg:w-[460px] lg:border-l lg:border-t-0">
           {sidebarMode === 'osmEnclosing' ? (
             <OsmEnclosingPanel
               target={selectedTarget}
@@ -525,7 +542,7 @@ function App() {
             />
           ) : (
             <>
-              <div className="border-b border-slate-200 bg-white px-5 py-4">
+              <div className="border-b border-slate-200 bg-white px-5 py-4 shadow-sm">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-sky-700">
@@ -533,10 +550,13 @@ function App() {
                       Swarm GSC
                     </div>
                     <h1 className="mt-1 text-xl font-semibold text-slate-950">
-                      Drone Mapping Control
+                      Vietnam Drone Control
                     </h1>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Flight coordination and field mapping
+                    </p>
                   </div>
-                  <div className="rounded-lg bg-sky-50 p-2 text-sky-700">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-700">
                     <Activity className="size-5" aria-hidden="true" />
                   </div>
                 </div>
@@ -564,7 +584,7 @@ function App() {
                         Live position and battery telemetry
                       </p>
                     </div>
-                    <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
+                    <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
                       Live
                     </span>
                   </div>
@@ -594,9 +614,14 @@ function App() {
                   className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
                   aria-live="polite"
                 >
-                  <h2 className="text-sm font-semibold text-slate-950">
-                    Command Status
-                  </h2>
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-sm font-semibold text-slate-950">
+                      Command Status
+                    </h2>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold capitalize text-slate-600">
+                      {commandStatusLabel(commandDispatch.state.status)}
+                    </span>
+                  </div>
                   <p className="mt-2 text-sm text-slate-600">
                     {commandDispatch.state.message}
                   </p>

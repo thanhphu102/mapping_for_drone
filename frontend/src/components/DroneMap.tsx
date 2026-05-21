@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, FeatureCollection, Geometry, Position } from 'geojson'
 import type { GeoJSONSource } from 'maplibre-gl'
 import type { Map, MapLayerMouseEvent } from 'maplibre-gl'
-import { useDroneMap } from '../hooks/useDroneMap'
+import { AlertTriangle, Loader2, MapPinned, Navigation } from 'lucide-react'
+import {
+  VIETNAM_FOCUS_ZOOM,
+  VIETNAM_MAP_CENTER,
+  useDroneMap,
+} from '../hooks/useDroneMap'
 import { useDroneMarkers } from '../hooks/useDroneMarkers'
 import { useDroneTracking } from '../hooks/useDroneTracking'
 import { useProjectedTarget } from '../hooks/useProjectedTarget'
@@ -330,7 +335,7 @@ export function DroneMap({
     }
     onTargetSelect(target)
   }, [onTargetSelect])
-  const { containerRef, map } = useDroneMap(handleMapTargetSelect)
+  const { containerRef, map, mapStatus } = useDroneMap(handleMapTargetSelect)
   const tracking = useDroneTracking({
     map,
     onNotice: onTrackingNotice,
@@ -399,6 +404,17 @@ export function DroneMap({
       })
       .slice(0, maxNearbyBuildings)
   }, [overlayCenter, overlayProjects])
+
+  const handleFocusVietnam = useCallback(() => {
+    if (!map) return
+    map.easeTo({
+      center: VIETNAM_MAP_CENTER,
+      zoom: VIETNAM_FOCUS_ZOOM,
+      bearing: 0,
+      pitch: 0,
+      duration: 650,
+    })
+  }, [map])
 
   useEffect(() => {
     overlayProjectsRef.current = overlayProjects
@@ -805,13 +821,39 @@ export function DroneMap({
   return (
     <div className="drone-map relative h-full min-h-[420px] overflow-hidden bg-slate-900 lg:min-h-0">
       <div ref={containerRef} className="absolute inset-0" aria-label="Drone map" />
-      <div className="pointer-events-none absolute left-4 top-4 z-10 rounded-lg border border-white/20 bg-slate-950/80 px-3 py-2 text-sm text-white shadow-lg backdrop-blur">
-        {tracking.status === 'tracking'
-          ? 'Tracking active. Map click target selection is disabled.'
-          : 'Click map to set target for connected drones'}
+      {mapStatus !== 'ready' ? (
+        <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-slate-950/20 backdrop-blur-[1px]">
+          <div className="flex items-center gap-3 rounded-lg border border-white/20 bg-slate-950/85 px-4 py-3 text-sm text-white shadow-xl">
+            {mapStatus === 'loading' ? (
+              <Loader2 className="size-4 animate-spin text-sky-300" aria-hidden="true" />
+            ) : (
+              <AlertTriangle className="size-4 text-amber-300" aria-hidden="true" />
+            )}
+            <span>{mapStatus === 'loading' ? 'Loading Vietnam map...' : 'Unable to load map'}</span>
+          </div>
+        </div>
+      ) : null}
+      <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-[min(26rem,calc(100%-2rem))] rounded-lg border border-white/20 bg-slate-950/82 px-3 py-2 text-sm text-white shadow-lg backdrop-blur">
+        <div className="flex items-center gap-2 font-semibold">
+          <MapPinned className="size-4 text-sky-300" aria-hidden="true" />
+          <span>Vietnam operations map</span>
+        </div>
+        <div className="mt-1 text-xs text-slate-200">
+          {tracking.status === 'tracking'
+            ? 'Tracking active. Map click target selection is disabled.'
+            : 'Click map to set target for connected drones.'}
+        </div>
       </div>
+      <button
+        type="button"
+        className="absolute left-4 top-20 z-20 inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+        onClick={handleFocusVietnam}
+      >
+        <Navigation className="size-3.5" aria-hidden="true" />
+        Focus Vietnam
+      </button>
       {overlayZoom >= floorPanelMinZoom && nearestOverlayProjects.length > 0 ? (
-        <div className="absolute left-4 top-16 z-20 w-72 rounded-lg border border-white/20 bg-slate-950/85 p-2 text-xs text-white shadow-lg backdrop-blur">
+        <div className="absolute left-4 top-32 z-20 w-72 rounded-lg border border-white/20 bg-slate-950/85 p-2 text-xs text-white shadow-lg backdrop-blur">
           <div className="mb-1 font-semibold text-sky-200">Spatial Maps</div>
           <div className="mb-2 text-[11px] text-slate-300">Nearest maps first</div>
           <div className="max-h-36 space-y-1 overflow-y-auto border-b border-white/10 pb-2">
