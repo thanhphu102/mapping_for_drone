@@ -12,6 +12,59 @@ DEFAULT_OBJECT_ID = "object-default"
 
 
 class ImportScanService:
+    def _normalize_scope_key(
+        self,
+        *,
+        object_id: str,
+        floor_id: str | None,
+        external_id: str | None,
+        geometry_hash: str,
+    ) -> tuple[str, str, str | None, str]:
+        return (
+            object_id,
+            str(floor_id or ""),
+            external_id.strip() if isinstance(external_id, str) and external_id.strip() else None,
+            geometry_hash,
+        )
+
+    def _existing_scope_keys(
+        self,
+        *,
+        project: dict[str, Any],
+        object_id: str,
+        floor_id: str | None,
+    ) -> set[tuple[str, str, str | None, str]]:
+        keys: set[tuple[str, str, str | None, str]] = set()
+        features = project.get("features")
+        if not isinstance(features, list):
+            return keys
+
+        for feature in features:
+            if not isinstance(feature, dict):
+                continue
+            if str(feature.get("objectId") or DEFAULT_OBJECT_ID) != object_id:
+                continue
+
+            existing_floor_id = feature.get("floorId")
+            properties = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
+            if existing_floor_id is None:
+                existing_floor_id = properties.get("floorId")
+            if str(existing_floor_id or "") != str(floor_id or ""):
+                continue
+
+            geometry_hash = str(properties.get("geometryHash") or "")
+            external_id = properties.get("externalId")
+            keys.add(
+                self._normalize_scope_key(
+                    object_id=object_id,
+                    floor_id=floor_id,
+                    external_id=str(external_id) if external_id is not None else None,
+                    geometry_hash=geometry_hash,
+                )
+            )
+
+        return keys
+
     def _extract_polygons(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         polygons = payload.get("polygons")
         if not isinstance(polygons, list):
@@ -135,6 +188,12 @@ class ImportScanService:
         preview_features: list[dict[str, Any]] = []
         invalid = 0
         warnings: list[str] = []
+        existing_keys = self._existing_scope_keys(
+            project=project,
+            object_id=object_id,
+            floor_id=floor_id,
+        )
+        import_keys: set[tuple[str, str, str | None, str]] = set()
         for item in polygons:
             try:
                 feature = self._build_feature(
@@ -143,6 +202,30 @@ class ImportScanService:
                     floor_id=floor_id,
                     polygon=item,
                 )
+                properties = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
+                geometry_hash = str(properties.get("geometryHash") or "")
+                external_id = (
+                    str(properties.get("externalId"))
+                    if properties.get("externalId") not in (None, "")
+                    else None
+                )
+                scope_key = self._normalize_scope_key(
+                    object_id=object_id,
+                    floor_id=floor_id,
+                    external_id=external_id,
+                    geometry_hash=geometry_hash,
+                )
+
+                if scope_key in existing_keys:
+                    invalid += 1
+                    warnings.append("Duplicate polygon on this floor was skipped")
+                    continue
+                if scope_key in import_keys:
+                    invalid += 1
+                    warnings.append("Duplicate polygon inside import file was skipped")
+                    continue
+
+                import_keys.add(scope_key)
                 preview_features.append(feature)
             except HTTPException as exc:
                 invalid += 1
