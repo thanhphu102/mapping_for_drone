@@ -131,7 +131,10 @@ class FeatureService:
         bbox: list[float],
         zoom: float,
         floor_id: str | None = None,
+        include_hidden_by_zoom: bool = False,
     ) -> list[dict[str, Any]]:
+        floors = project.get("floors")
+        has_floors = isinstance(floors, list) and len(floors) > 0
         visible_features = []
         for feature in self.list_features(project):
             if not isinstance(feature, dict):
@@ -143,12 +146,20 @@ class FeatureService:
             feature_floor_id = feature.get("floorId")
             if feature_floor_id is None:
                 feature_floor_id = properties.get("floorId")
-            if floor_id and str(feature_floor_id or "") != floor_id:
-                continue
-            feature_min_zoom = float(properties.get("minZoom", 0))
-            feature_max_zoom = float(properties.get("maxZoom", 24))
-            if zoom < feature_min_zoom or zoom > feature_max_zoom:
-                continue
+            if has_floors:
+                # When project has floors, hide no-floor features and only keep
+                # features on the selected floor.
+                if feature_floor_id in (None, ""):
+                    continue
+                if floor_id and str(feature_floor_id) != floor_id:
+                    continue
+                if not floor_id:
+                    continue
+            if not include_hidden_by_zoom:
+                feature_min_zoom = float(properties.get("minZoom", 0))
+                feature_max_zoom = float(properties.get("maxZoom", 24))
+                if zoom < feature_min_zoom or zoom > feature_max_zoom:
+                    continue
             feature_bbox = geometry_service.geometry_bounds(geometry)
             if feature_bbox and geometry_service.bbox_intersects(feature_bbox, bbox):
                 visible_features.append(feature)

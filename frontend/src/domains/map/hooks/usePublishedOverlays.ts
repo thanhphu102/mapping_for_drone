@@ -44,6 +44,22 @@ interface UsePublishedOverlaysOptions {
   scheduleOverlayRefreshRef: MutableRefObject<(() => void) | null>
 }
 
+function firstPublishedFloorId(project: DrawingProject): string | null {
+  if (project.floors.length > 0) {
+    return project.floors[0]?.id ?? null
+  }
+  for (const feature of project.publishedFeatures ?? []) {
+    const props = (feature.properties ?? {}) as Record<string, unknown>
+    const rawFloorId =
+      (feature as { floorId?: unknown }).floorId
+      ?? props.floorId
+    if (rawFloorId != null && String(rawFloorId)) {
+      return String(rawFloorId)
+    }
+  }
+  return null
+}
+
 export function usePublishedOverlays({
   map,
   overlayProjects,
@@ -232,7 +248,7 @@ export function usePublishedOverlays({
       if (refreshTimer) {
         window.clearTimeout(refreshTimer)
       }
-      refreshTimer = window.setTimeout(refreshOverlays, 120)
+      refreshTimer = window.setTimeout(refreshOverlays, 220)
     }
     scheduleOverlayRefreshRef.current = scheduleRefresh
 
@@ -254,8 +270,8 @@ export function usePublishedOverlays({
       if (!projectId) return
       const nextProject = overlayProjectsRef.current.find((project) => project.id === projectId)
       setSelectedOverlayProjectId(projectId)
-      if (nextProject && nextProject.floors.length > 0) {
-        setSelectedOverlayFloorId(nextProject.floors[0].id)
+      if (nextProject) {
+        setSelectedOverlayFloorId(firstPublishedFloorId(nextProject))
       } else {
         setSelectedOverlayFloorId(null)
       }

@@ -15,6 +15,28 @@ function approxDistanceSq(a: [number, number], b: [number, number]) {
   return dx * dx + dy * dy
 }
 
+function fallbackFloorsFromPublishedFeatures(project: DrawingProject) {
+  const byId = new Map<string, { id: string; label: string; code: string; level: number }>()
+  for (const feature of project.publishedFeatures ?? []) {
+    const props = (feature.properties ?? {}) as Record<string, unknown>
+    const rawFloorId =
+      (feature as { floorId?: unknown }).floorId
+      ?? props.floorId
+    const floorId = rawFloorId == null ? '' : String(rawFloorId)
+    if (!floorId) continue
+    if (byId.has(floorId)) continue
+    const rawLevel = Number(props.floorLevel)
+    const level = Number.isFinite(rawLevel) ? rawLevel : 0
+    byId.set(floorId, {
+      id: floorId,
+      label: typeof props.floorLabel === 'string' && props.floorLabel.trim() ? props.floorLabel : floorId,
+      code: typeof props.floorCode === 'string' && props.floorCode.trim() ? props.floorCode : floorId,
+      level,
+    })
+  }
+  return Array.from(byId.values())
+}
+
 export function useOverlaySelection() {
   const [overlayProjects, setOverlayProjects] = useState<DrawingProject[]>([])
   const [selectedOverlayProjectId, setSelectedOverlayProjectId] = useState<string | null>(null)
@@ -32,7 +54,12 @@ export function useOverlaySelection() {
     [overlayProjects, selectedOverlayProjectId],
   )
   const overlayFloors = useMemo(
-    () => [...(selectedOverlayProject?.floors ?? [])].sort((a, b) => b.level - a.level),
+    () => {
+      if (!selectedOverlayProject) return []
+      const explicitFloors = selectedOverlayProject.floors ?? []
+      const floors = explicitFloors.length > 0 ? explicitFloors : fallbackFloorsFromPublishedFeatures(selectedOverlayProject)
+      return [...floors].sort((a, b) => b.level - a.level)
+    },
     [selectedOverlayProject],
   )
   const nearestOverlayProjects = useMemo(() => {
@@ -61,12 +88,36 @@ export function useOverlaySelection() {
     if (selectedOverlayProjectId) return
     if (nearestOverlayProjects.length === 0) return
     const first = nearestOverlayProjects[0]
+    const firstProjectFloors =
+      first.floors.length > 0
+        ? first.floors
+        : fallbackFloorsFromPublishedFeatures(first)
     const timer = window.setTimeout(() => {
       setSelectedOverlayProjectId(first.id)
-      setSelectedOverlayFloorId(first.floors[0]?.id ?? null)
+      setSelectedOverlayFloorId(firstProjectFloors[0]?.id ?? null)
     }, 0)
     return () => window.clearTimeout(timer)
   }, [nearestOverlayProjects, overlayZoom, selectedOverlayProjectId])
+
+  useEffect(() => {
+    if (!selectedOverlayProject) return
+    if (overlayFloors.length === 0) {
+      if (selectedOverlayFloorId !== null) {
+        const timer = window.setTimeout(() => {
+          setSelectedOverlayFloorId(null)
+        }, 0)
+        return () => window.clearTimeout(timer)
+      }
+      return
+    }
+    const hasSelected = overlayFloors.some((floor) => floor.id === selectedOverlayFloorId)
+    if (!hasSelected) {
+      const timer = window.setTimeout(() => {
+        setSelectedOverlayFloorId(overlayFloors[0].id)
+      }, 0)
+      return () => window.clearTimeout(timer)
+    }
+  }, [overlayFloors, selectedOverlayFloorId, selectedOverlayProject])
 
   return {
     overlayProjects,

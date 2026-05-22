@@ -71,19 +71,30 @@ export function useTrackingFlow({
   }, [selectedTrackingDroneId, trackingState.status])
 
   const handleStartTracking = useCallback(() => {
-    if (!selectedTrackingDroneId) {
+    const fallbackDroneId = connectedDrones[0]?.id ?? null
+    const trackingDroneId = selectedTrackingDroneId ?? fallbackDroneId
+
+    if (!trackingDroneId) {
       onNotice({
         tone: 'info',
-        title: 'Select a drone first',
-        detail: 'Click a drone row in Connected Drones table before starting tracking.',
+        title: 'No connected drone',
+        detail: 'Connect at least one drone before starting route tracking.',
       })
       return
+    }
+    if (!selectedTrackingDroneId) {
+      setSelectedTrackingDroneId(trackingDroneId)
+      onNotice({
+        tone: 'info',
+        title: 'Auto-selected drone',
+        detail: `Using ${trackingDroneId} for route tracking.`,
+      })
     }
     if (hasSelectedTarget) {
       onCancelTarget()
     }
-    trackingControllerRef.current?.startTracking(selectedTrackingDroneId)
-  }, [hasSelectedTarget, onCancelTarget, onNotice, selectedTrackingDroneId])
+    trackingControllerRef.current?.startTracking(trackingDroneId)
+  }, [connectedDrones, hasSelectedTarget, onCancelTarget, onNotice, selectedTrackingDroneId])
 
   const handleStopTracking = useCallback(() => {
     trackingControllerRef.current?.stopTracking()

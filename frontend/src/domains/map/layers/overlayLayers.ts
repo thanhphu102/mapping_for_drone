@@ -42,14 +42,26 @@ export function projectsToFeatureCollection(
     features: projects.flatMap((project) =>
       (project.publishedFeatures ?? [])
         .filter((feature) => {
-          if (!selectedProjectId || project.id !== selectedProjectId) return true
-          if (!selectedFloorId) return true
-          const floorId = String(
+          const hasFloors = Array.isArray(project.floors) && project.floors.length > 0
+          const rawFloorId =
             (feature as { floorId?: unknown }).floorId
-              ?? (feature.properties as Record<string, unknown> | undefined)?.floorId
-              ?? '',
-          )
-          return floorId === selectedFloorId
+            ?? (feature.properties as Record<string, unknown> | undefined)?.floorId
+          const floorId = rawFloorId == null ? '' : String(rawFloorId)
+
+          // Rule 1: if project has floors, never render no-floor features.
+          if (hasFloors && floorId === '') {
+            return false
+          }
+          // Rule 2: if project has no floors, only render no-floor features.
+          if (!hasFloors && floorId !== '') {
+            return false
+          }
+
+          // Optional floor focus when a project is selected.
+          if (selectedProjectId && project.id === selectedProjectId && selectedFloorId && hasFloors) {
+            return floorId === selectedFloorId
+          }
+          return true
         })
         .map((feature) => ({
           ...feature,
