@@ -6,6 +6,81 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_OBJECT_ID = "object-default"
+
+
+def _clone_json(value: Any) -> Any:
+    return json.loads(json.dumps(value))
+
+
+def _normalize_feature_identity(project: dict[str, Any], feature: dict[str, Any]) -> bool:
+    modified = False
+    props = feature.get("properties")
+    if not isinstance(props, dict):
+        props = {}
+        feature["properties"] = props
+        modified = True
+
+    floor_id_from_props = props.get("floorId")
+    if "projectId" not in feature:
+        feature["projectId"] = project.get("id")
+        modified = True
+    if "objectId" not in feature or not feature.get("objectId"):
+        feature["objectId"] = DEFAULT_OBJECT_ID
+        modified = True
+    if "floorId" not in feature:
+        feature["floorId"] = floor_id_from_props
+        modified = True
+    if "floorId" not in props:
+        props["floorId"] = feature.get("floorId")
+        modified = True
+    return modified
+
+
+def _ensure_project_objects(project: dict[str, Any]) -> bool:
+    modified = False
+    floors = project.get("floors")
+    if not isinstance(floors, list):
+        project["floors"] = []
+        floors = project["floors"]
+        modified = True
+
+    objects = project.get("objects")
+    if not isinstance(objects, list):
+        objects = []
+        project["objects"] = objects
+        modified = True
+
+    default_object = next(
+        (
+            obj
+            for obj in objects
+            if isinstance(obj, dict) and str(obj.get("id") or "") == DEFAULT_OBJECT_ID
+        ),
+        None,
+    )
+    if default_object is None:
+        default_object = {
+            "id": DEFAULT_OBJECT_ID,
+            "name": "Default Object",
+            "sourceKey": "legacy",
+            "mode": project.get("editorMode") or "custom",
+            "floors": _clone_json(floors),
+        }
+        objects.append(default_object)
+        modified = True
+    elif not isinstance(default_object.get("floors"), list):
+        default_object["floors"] = _clone_json(floors)
+        modified = True
+
+    default_object_floors = default_object.get("floors")
+    if isinstance(default_object_floors, list):
+        if _clone_json(default_object_floors) != _clone_json(floors):
+            project["floors"] = _clone_json(default_object_floors)
+            modified = True
+    return modified
+
+
 def _ensure_project_feature_snapshots(project: dict[str, Any]) -> None:
     features = project.get("features")
     if not isinstance(features, list):
@@ -47,6 +122,8 @@ class JsonProjectRepository:
             for project in data["projects"]:
                 if not isinstance(project, dict):
                     continue
+                if _ensure_project_objects(project):
+                    modified = True
                 if "layers" in project:
                     project.pop("layers", None)
                     modified = True
@@ -55,12 +132,12 @@ class JsonProjectRepository:
                     for feature in features:
                         if not isinstance(feature, dict):
                             continue
-                        props = feature.get("properties")
-                        if not isinstance(props, dict):
-                            feature["properties"] = {}
-                            props = feature["properties"]
-                        if "floorId" not in props:
-                            props["floorId"] = None
+                        if _normalize_feature_identity(project, feature):
+                            modified = True
+                published_features = project.get("publishedFeatures")
+                if isinstance(published_features, list):
+                    for feature in published_features:
+                        if isinstance(feature, dict) and _normalize_feature_identity(project, feature):
                             modified = True
 
             if modified:
@@ -93,6 +170,7 @@ class JsonProjectRepository:
             project for project in projects if isinstance(project, dict)
         ]
         for project in normalized_projects:
+            _ensure_project_objects(project)
             _ensure_project_feature_snapshots(project)
         return normalized_projects
 
@@ -189,4 +267,3 @@ class JsonProjectRepository:
             await self.save_document(document)
 
         return deleted
-

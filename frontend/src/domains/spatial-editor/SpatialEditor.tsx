@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, Geometry, MultiPolygon, Position } from 'geojson'
 import type { Map as MapLibreMap } from 'maplibre-gl'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFeature } from './types'
 import {
   createChildProject,
@@ -37,7 +37,9 @@ import { useEditorNotices } from './hooks/useEditorNotices'
 import { useFloorManagement } from './hooks/useFloorManagement'
 import { useImportScanJson } from './hooks/useImportScanJson'
 import { usePublishProject } from './hooks/usePublishProject'
+import { useInspectorFormState } from './hooks/useInspectorFormState'
 import { geometryInsideBoundaryStrict } from './geometry/validation'
+import { writeStoredMainMapCamera } from '../map/utils/mainMapCamera'
 
 function isEditableEventTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -217,10 +219,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [boundaryRendered, setBoundaryRendered] = useState(false)
   const [snapPreview, setSnapPreview] = useState<SnapPreview | null>(null)
   const [showFloorSelector, setShowFloorSelector] = useState(false)
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
+  const [mobileStructureOpen, setMobileStructureOpen] = useState(false)
+  const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<string[]>([])
   const [tagFilter, setTagFilter] = useState('')
   const [importPreviewFeatures, setImportPreviewFeatures] = useState<Feature[]>([])
-  const [inspectorDraft, setInspectorDraft] = useState({ name: '', tag: '', noteText: '' })
   const [isSavingInspector, setIsSavingInspector] = useState(false)
   const [textBoxDraft, setTextBoxDraft] = useState<{ start: Position; end: Position; text: string } | null>(null)
   const [boxShapeVariant, setBoxShapeVariant] = useState<BoxShapeVariant | null>(null)
@@ -674,6 +679,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     return visibleFeatures.filter((feature) => selectedSet.has(String(feature.id ?? feature.properties?.id ?? '')))
   }, [selectedFeatureIds, visibleFeatures])
 
+  const {
+    draft: inspectorDraft,
+    setName: setInspectorName,
+    setTag: setInspectorTag,
+    setNoteText: setInspectorNoteText,
+  } = useInspectorFormState(selectedFeatures)
+
   const handleMoveFeatures = useCallback((featureIds: string[], deltaLng: number, deltaLat: number) => {
     if (featureIds.length === 0) return
     if (!project || !map) return
@@ -809,26 +821,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     const target = selectedFeatures[0]
     return project.editorMode === 'campus' && target.geometry.type === 'Polygon' ? target : null
   }, [project, selectedFeatures])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (selectedFeatures.length === 1) {
-        const props = (selectedFeatures[0].properties ?? {}) as Record<string, unknown>
-        setInspectorDraft({
-          name: String(props.name ?? ''),
-          tag: String(props.tag ?? ''),
-          noteText: String(props.noteText ?? ''),
-        })
-        return
-      }
-      if (selectedFeatures.length > 1) {
-        setInspectorDraft((current) => ({ ...current, name: '' }))
-        return
-      }
-      setInspectorDraft({ name: '', tag: '', noteText: '' })
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [selectedFeatures])
 
   const handleSaveInspector = useCallback(async () => {
     if (selectedFeatures.length === 0) return
@@ -1306,6 +1298,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             zoom: map.getZoom(),
             layerId: null,
             floorId: selectedFloorId,
+            includeHiddenByZoom: true,
           },
           abortController.signal,
         )
@@ -1430,30 +1423,91 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     return [...projectStack.map((p) => p.name), project?.name ?? ''].filter(Boolean)
   }, [project?.name, projectStack])
 
+  const handleBackToMainMap = useCallback(() => {
+    if (map && project) {
+      const bounds: [[number, number], [number, number]] = [
+        [project.bbox[0], project.bbox[1]],
+        [project.bbox[2], project.bbox[3]],
+      ]
+      const cameraForBounds = map.cameraForBounds(bounds, {
+        padding: { top: 80, right: 80, bottom: 80, left: 80 },
+        maxZoom: 18.5,
+      })
+      if (cameraForBounds?.center) {
+        const nextCenter = Array.isArray(cameraForBounds.center)
+          ? cameraForBounds.center
+          : ('lng' in cameraForBounds.center
+            ? [cameraForBounds.center.lng, cameraForBounds.center.lat]
+            : [cameraForBounds.center.lon, cameraForBounds.center.lat])
+        const safeZoom = Number.isFinite(cameraForBounds.zoom)
+          ? Math.max(project.boundaryMinZoom ?? 12, Math.min(18.5, Number(cameraForBounds.zoom)))
+          : Math.max(project.boundaryMinZoom ?? 12, Math.min(18.5, map.getZoom()))
+        writeStoredMainMapCamera({
+          center: [nextCenter[0], nextCenter[1]],
+          zoom: safeZoom,
+          bearing: 0,
+          pitch: 0,
+        })
+        onBack()
+        return
+      }
+    }
+    if (map) {
+      const center = map.getCenter()
+      writeStoredMainMapCamera({
+        center: [center.lng, center.lat],
+        zoom: Math.min(18.5, map.getZoom()),
+        bearing: 0,
+        pitch: 0,
+      })
+    }
+    onBack()
+  }, [map, onBack, project])
+
   return (
     <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-100 text-slate-950">
-      <EditorStructurePanel
-        project={project}
-        floors={floors}
-        selectedFloorId={selectedFloorId}
-        onSelectFloor={setSelectedFloorId}
-        selectedFeatureIds={selectedFeatureIds}
-        onSelectFeatureIds={setSelectedFeatureIds}
-        visibleFeatures={visibleFeatures}
-        tagFilter={tagFilter}
-        onTagFilterChange={setTagFilter}
-        onCreateFloor={handleCreateFloor}
-        isCreatingFloor={isCreatingFloor}
-        onUpdateFloor={handleUpdateFloor}
-        onDeleteFloor={handleDeleteFloor}
-        isUpdatingFloor={isUpdatingFloor}
-        importPreview={importPreview}
-        importError={importError}
-        importLoading={importLoading}
-        onPreviewImport={handlePreviewImport}
-        onCommitImport={handleCommitImport}
-        onUnpreviewImport={handleUnpreviewImport}
-      />
+      <div className={`hidden overflow-hidden border-r border-slate-200 bg-white transition-all lg:block ${
+        leftSidebarCollapsed ? 'w-[64px]' : 'w-[320px] max-w-[34vw]'
+      }`}>
+        <div className="border-b border-slate-200 bg-white px-2 py-2">
+          <button
+            type="button"
+            className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={() => setLeftSidebarCollapsed((current) => !current)}
+          >
+            {leftSidebarCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
+            {leftSidebarCollapsed ? 'Open' : 'Collapse'}
+          </button>
+        </div>
+        {leftSidebarCollapsed ? (
+          <div className="flex h-[calc(100%-45px)] items-center justify-center">
+            <PanelLeftOpen className="size-5 text-slate-400" />
+          </div>
+        ) : (
+          <EditorStructurePanel
+            project={project}
+            floors={floors}
+            selectedFloorId={selectedFloorId}
+            onSelectFloor={setSelectedFloorId}
+            selectedFeatureIds={selectedFeatureIds}
+            onSelectFeatureIds={setSelectedFeatureIds}
+            visibleFeatures={visibleFeatures}
+            tagFilter={tagFilter}
+            onTagFilterChange={setTagFilter}
+            onCreateFloor={handleCreateFloor}
+            isCreatingFloor={isCreatingFloor}
+            onUpdateFloor={handleUpdateFloor}
+            onDeleteFloor={handleDeleteFloor}
+            isUpdatingFloor={isUpdatingFloor}
+            importPreview={importPreview}
+            importError={importError}
+            importLoading={importLoading}
+            onPreviewImport={handlePreviewImport}
+            onCommitImport={handleCommitImport}
+            onUnpreviewImport={handleUnpreviewImport}
+          />
+        )}
+      </div>
 
       <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-200">
         <div
@@ -1464,12 +1518,30 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         <button
           type="button"
           className="absolute left-4 top-4 z-30 inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-sm font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900"
-          onClick={onBack}
+          onClick={handleBackToMainMap}
           aria-label="Back to main map"
         >
           <ArrowLeft className="size-4" aria-hidden="true" />
           <span>Main map</span>
         </button>
+        <div className="absolute right-4 top-4 z-30 flex items-center gap-2 lg:hidden">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-lg"
+            onClick={() => setMobileStructureOpen(true)}
+          >
+            <PanelLeftOpen className="size-3.5" />
+            Structure
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-lg"
+            onClick={() => setMobileInspectorOpen(true)}
+          >
+            <PanelRightOpen className="size-3.5" />
+            Inspector
+          </button>
+        </div>
         <SpatialCanvasOverlay
           map={map}
           draftMode={mode}
@@ -1515,7 +1587,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           onClearDraft={() => setDraftPoints([])}
           onSaveDraft={handleSaveDraft}
           onPublish={handlePublish}
-          onBack={onBack}
+          onBack={handleBackToMainMap}
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           zoomLabel={`${Math.round(mapZoom * 10) / 10}x`}
@@ -1564,25 +1636,104 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         ) : null}
       </main>
 
-        <EditorSidebar
-          project={project}
-          projectConfig={projectConfig}
-        floors={floors}
-        selectedFloorId={selectedFloorId}
-        mapZoom={mapZoom}
-        mapReady={mapReady}
-        boundaryRendered={boundaryRendered}
-        visibleFeatures={visibleFeatures}
-        draftFeature={draftCollection}
-        hoverCoordinate={hoverCoordinate}
-        snapPreview={snapPreview}
-        message={message}
-        selectedFeatures={selectedFeatures}
-          inspectorDraft={inspectorDraft}
-          onInspectorDraftChange={setInspectorDraft}
-          onSaveInspector={handleSaveInspector}
-          isSavingInspector={isSavingInspector}
-        />
+      <div className={`hidden overflow-hidden border-l border-slate-200 bg-white transition-all lg:block ${
+        rightSidebarCollapsed ? 'w-[64px]' : 'w-[340px] max-w-[36vw]'
+      }`}>
+        <div className="border-b border-slate-200 bg-white px-2 py-2">
+          <button
+            type="button"
+            className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={() => setRightSidebarCollapsed((current) => !current)}
+          >
+            {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
+            {rightSidebarCollapsed ? 'Open' : 'Collapse'}
+          </button>
+        </div>
+        {rightSidebarCollapsed ? (
+          <div className="flex h-[calc(100%-45px)] items-center justify-center">
+            <PanelRightOpen className="size-5 text-slate-400" />
+          </div>
+        ) : (
+          <EditorSidebar
+            project={project}
+            projectConfig={projectConfig}
+            floors={floors}
+            selectedFloorId={selectedFloorId}
+            mapZoom={mapZoom}
+            mapReady={mapReady}
+            boundaryRendered={boundaryRendered}
+            visibleFeatures={visibleFeatures}
+            draftFeature={draftCollection}
+            hoverCoordinate={hoverCoordinate}
+            snapPreview={snapPreview}
+            message={message}
+            selectedFeatures={selectedFeatures}
+            inspectorDraft={inspectorDraft}
+            onInspectorNameChange={setInspectorName}
+            onInspectorTagChange={setInspectorTag}
+            onInspectorNoteChange={setInspectorNoteText}
+            onSaveInspector={handleSaveInspector}
+            isSavingInspector={isSavingInspector}
+          />
+        )}
+      </div>
+
+      {mobileStructureOpen ? (
+        <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileStructureOpen(false)}>
+          <div className="absolute left-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
+            <EditorStructurePanel
+              project={project}
+              floors={floors}
+              selectedFloorId={selectedFloorId}
+              onSelectFloor={setSelectedFloorId}
+              selectedFeatureIds={selectedFeatureIds}
+              onSelectFeatureIds={setSelectedFeatureIds}
+              visibleFeatures={visibleFeatures}
+              tagFilter={tagFilter}
+              onTagFilterChange={setTagFilter}
+              onCreateFloor={handleCreateFloor}
+              isCreatingFloor={isCreatingFloor}
+              onUpdateFloor={handleUpdateFloor}
+              onDeleteFloor={handleDeleteFloor}
+              isUpdatingFloor={isUpdatingFloor}
+              importPreview={importPreview}
+              importError={importError}
+              importLoading={importLoading}
+              onPreviewImport={handlePreviewImport}
+              onCommitImport={handleCommitImport}
+              onUnpreviewImport={handleUnpreviewImport}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {mobileInspectorOpen ? (
+        <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileInspectorOpen(false)}>
+          <div className="absolute right-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
+            <EditorSidebar
+              project={project}
+              projectConfig={projectConfig}
+              floors={floors}
+              selectedFloorId={selectedFloorId}
+              mapZoom={mapZoom}
+              mapReady={mapReady}
+              boundaryRendered={boundaryRendered}
+              visibleFeatures={visibleFeatures}
+              draftFeature={draftCollection}
+              hoverCoordinate={hoverCoordinate}
+              snapPreview={snapPreview}
+              message={message}
+              selectedFeatures={selectedFeatures}
+              inspectorDraft={inspectorDraft}
+              onInspectorNameChange={setInspectorName}
+              onInspectorTagChange={setInspectorTag}
+              onInspectorNoteChange={setInspectorNoteText}
+              onSaveInspector={handleSaveInspector}
+              isSavingInspector={isSavingInspector}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

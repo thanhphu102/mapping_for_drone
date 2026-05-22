@@ -5,10 +5,41 @@ from uuid import uuid4
 
 from ..core.time import now_ts
 
+DEFAULT_OBJECT_ID = "object-default"
+
 
 class FloorService:
+    def get_default_object(self, project: dict[str, Any]) -> dict[str, Any]:
+        objects = project.setdefault("objects", [])
+        default_object = next(
+            (
+                obj
+                for obj in objects
+                if isinstance(obj, dict) and str(obj.get("id") or "") == DEFAULT_OBJECT_ID
+            ),
+            None,
+        )
+        if default_object is None:
+            default_object = {
+                "id": DEFAULT_OBJECT_ID,
+                "name": "Default Object",
+                "sourceKey": "legacy",
+                "mode": project.get("editorMode") or "custom",
+                "floors": [],
+            }
+            objects.append(default_object)
+        if not isinstance(default_object.get("floors"), list):
+            default_object["floors"] = []
+        return default_object
+
     def list_floors(self, project: dict[str, Any]) -> list[dict[str, Any]]:
-        return project.setdefault("floors", [])
+        default_object = self.get_default_object(project)
+        object_floors = default_object.get("floors")
+        if not isinstance(object_floors, list):
+            object_floors = []
+            default_object["floors"] = object_floors
+        project["floors"] = object_floors
+        return object_floors
 
     def find_floor_by_id(self, project: dict[str, Any], floor_id: str) -> dict[str, Any] | None:
         return next(
@@ -82,8 +113,11 @@ class FloorService:
     def delete_floor(self, project: dict[str, Any], floor_id: str) -> bool:
         floors = self.list_floors(project)
         original = len(floors)
-        project["floors"] = [floor for floor in floors if floor.get("id") != floor_id]
-        deleted = len(project["floors"]) != original
+        next_floors = [floor for floor in floors if floor.get("id") != floor_id]
+        default_object = self.get_default_object(project)
+        default_object["floors"] = next_floors
+        project["floors"] = next_floors
+        deleted = len(next_floors) != original
         if deleted:
             project["updatedAt"] = now_ts()
         return deleted
@@ -118,4 +152,3 @@ class FloorService:
             code=code or f"F{level or 1}",
             level=level or 1,
         )
-

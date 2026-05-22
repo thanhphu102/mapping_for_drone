@@ -56,14 +56,14 @@ export function DroneTrackingControls({
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-950">Drone Tracking</h2>
+          <h2 className="text-sm font-semibold text-slate-950">Drone Route Tracking</h2>
           <p className="mt-1 text-sm text-slate-600">
             {hasDrone ? (
               <>
                 Selected: <span className="font-semibold text-slate-900">{selectedDroneId}</span>
               </>
             ) : (
-              'Select a drone to start tracking'
+              'Start now and the first connected drone will be used automatically'
             )}
           </p>
         </div>
@@ -89,6 +89,11 @@ export function DroneTrackingControls({
 
       <div className="space-y-2">
         {status === 'tracking' ? (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+            Quick stop: press <span className="font-semibold">Enter</span>, <span className="font-semibold">/</span>, or left-click map.
+          </div>
+        ) : null}
+        {status === 'tracking' ? (
           <button
             type="button"
             className={`${baseButtonClass} ${stopButtonClass}`}
@@ -101,7 +106,6 @@ export function DroneTrackingControls({
             type="button"
             className={`${baseButtonClass} ${startButtonClass}`}
             onClick={onStart}
-            disabled={!hasDrone}
           >
             Start Tracking
           </button>

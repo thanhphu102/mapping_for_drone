@@ -19,6 +19,7 @@ export async function fetchProjectVisibleFeatures(
     zoom: number
     layerId?: string | null
     floorId?: string | null
+    includeHiddenByZoom?: boolean
   },
   signal?: AbortSignal,
 ): Promise<SpatialFeature[]> {
@@ -32,6 +33,9 @@ export async function fetchProjectVisibleFeatures(
   }
   if (payload.floorId) {
     params.set('floorId', payload.floorId)
+  }
+  if (payload.includeHiddenByZoom) {
+    params.set('includeHiddenByZoom', 'true')
   }
   const response = await fetch(`/api/map-features?${params.toString()}`, { signal })
   const data = await readJsonResponse<{ features: SpatialFeature[] }>(response)

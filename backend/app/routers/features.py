@@ -21,6 +21,7 @@ async def get_map_features(
     zoom: float,
     layerId: str | None = None,
     floorId: str | None = None,
+    includeHiddenByZoom: bool = False,
 ):
     del layerId
     try:
@@ -36,6 +37,7 @@ async def get_map_features(
             parsed_bbox,
             zoom,
             floor_id=floorId,
+            include_hidden_by_zoom=includeHiddenByZoom,
         )
     }
 
@@ -59,4 +61,3 @@ async def delete_drawing_feature(project_id: str, feature_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Feature not found")
     return {"ok": True}
-

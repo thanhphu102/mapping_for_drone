@@ -83,11 +83,10 @@ const rasterOsmStyle: StyleSpecification = {
     osm: {
       type: 'raster',
       tiles: [
-        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        '/api/tiles/osm/{z}/{x}/{y}.png',
       ],
       tileSize: 256,
+      maxzoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
     },
   },
@@ -95,13 +94,16 @@ const rasterOsmStyle: StyleSpecification = {
     {
       id: 'background',
       type: 'background',
-      paint: { 'background-color': '#0f172a' },
+      paint: { 'background-color': '#f8fafc' },
     },
     {
       id: 'osm',
       type: 'raster',
       source: 'osm',
-      paint: { 'raster-fade-duration': 0 },
+      paint: {
+        'raster-fade-duration': 0,
+        'raster-resampling': 'nearest',
+      },
     },
   ],
 }
@@ -115,6 +117,7 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<Map | null>(null)
   const onTargetSelectRef = useRef(onTargetSelect)
+  const mapReadyRef = useRef(false)
   const [map, setMap] = useState<Map | null>(null)
   const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
@@ -133,6 +136,8 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
       style: rasterOsmStyle,
       center: initialCamera.camera.center,
       zoom: initialCamera.camera.zoom,
+      maxZoom: 19,
+      renderWorldCopies: false,
       bearing: initialCamera.camera.bearing,
       pitch: initialCamera.camera.pitch,
       fadeDuration: 0,
@@ -206,6 +211,7 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
       }
       mapInstance.resize()
       persistCamera()
+      mapReadyRef.current = true
       setMapStatus('ready')
     }
 
@@ -229,8 +235,33 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
 
     const handleError = (event: unknown) => {
       const maybeError = event as { error?: unknown; sourceId?: string }
-      console.error('MapLibre runtime error:', maybeError)
-      setMapStatus('error')
+      if (maybeError.sourceId === 'osm') {
+        return
+      }
+      // MapLibre can emit recoverable source/tile runtime errors.
+      // Do not show fatal overlay once map has loaded successfully.
+      if (mapReadyRef.current) {
+        console.warn('MapLibre recoverable runtime warning:', maybeError)
+        return
+      }
+      const errorMessage =
+        typeof maybeError.error === 'object' &&
+        maybeError.error &&
+        'message' in (maybeError.error as Record<string, unknown>)
+          ? String((maybeError.error as { message?: unknown }).message ?? '')
+          : ''
+      const lowered = errorMessage.toLowerCase()
+      const severe =
+        lowered.includes('webgl') ||
+        lowered.includes('context') ||
+        lowered.includes('failed to initialize')
+
+      if (severe) {
+        console.error('MapLibre fatal initialization error:', maybeError)
+        setMapStatus('error')
+      } else {
+        console.warn('MapLibre non-fatal initialization warning:', maybeError)
+      }
     }
 
     const persistCamera = () => {
@@ -272,6 +303,7 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
       canvas.removeEventListener('webglcontextrestored', handleWebGlContextRestored)
       mapInstance.remove()
       mapRef.current = null
+      mapReadyRef.current = false
       setMap(null)
     }
   }, [])

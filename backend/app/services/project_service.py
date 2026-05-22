@@ -155,6 +155,7 @@ def build_project_payload(
     now = now_ts()
     thresholds = zoom_thresholds_for_mode(editor_mode)
     stats = geometry_service.geometry_stats(geometry)
+    floors = default_floors(editor_mode)
     return {
         "id": str(uuid4()),
         "name": name,
@@ -173,7 +174,16 @@ def build_project_payload(
         "detailMinZoom": thresholds["detailMinZoom"],
         "indoorMinZoom": thresholds["indoorMinZoom"],
         "config": default_project_config(editor_mode),
-        "floors": default_floors(editor_mode),
+        "objects": [
+            {
+                "id": "object-default",
+                "name": name,
+                "sourceKey": source,
+                "mode": editor_mode,
+                "floors": clone_json_value(floors),
+            }
+        ],
+        "floors": floors,
         "features": [],
         "publishedFeatures": [],
         "parentProjectId": parent_project_id,
@@ -239,4 +249,3 @@ class ProjectService:
 
     async def delete_project(self, project_id: str) -> bool:
         return await self.repository.delete_project(project_id)
-

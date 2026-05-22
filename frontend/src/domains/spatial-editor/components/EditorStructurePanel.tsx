@@ -72,7 +72,7 @@ export function EditorStructurePanel({
   })
 
   return (
-    <aside className="flex h-full w-[320px] max-w-[34vw] flex-col border-r border-slate-200 bg-white text-slate-900">
+    <aside className="flex h-full w-full flex-col border-r border-slate-200 bg-white text-slate-900">
       <header className="border-b border-slate-200 px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
           <Building2 className="size-4 text-sky-600" aria-hidden="true" />

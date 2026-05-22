@@ -22,6 +22,17 @@ import type { OsmCandidate } from '../../osm/types'
 import type { SaveTrackedRouteResponse } from '../../tracking/types'
 import { TargetCommandPopover } from '../../drone/components/TargetCommandPopover'
 
+function isEditableEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  const tagName = target.tagName
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return true
+  }
+  return Boolean(target.closest('[contenteditable="true"]'))
+}
+
 interface DroneMapProps {
   dronesById: DroneRegistry
   dirtyIds: string[]
@@ -76,17 +87,27 @@ export function DroneMap({
   onTrackingControllerReady,
 }: DroneMapProps) {
   const isTrackingRef = useRef(false)
+  const stopTrackingRef = useRef<() => void>(() => {})
   const handleMapTargetSelect = useCallback((target: MapTargetDraft) => {
     if (isTrackingRef.current) {
+      stopTrackingRef.current()
+      onTrackingNotice({
+        tone: 'info',
+        title: 'Tracking stopped',
+        detail: 'Left click stops route tracking quickly.',
+      })
       return
     }
     onTargetSelect(target)
-  }, [onTargetSelect])
+  }, [onTargetSelect, onTrackingNotice])
   const { containerRef, map, mapStatus } = useBaseMap(handleMapTargetSelect)
   const tracking = useDroneTracking({
     map,
     onNotice: onTrackingNotice,
   })
+  useEffect(() => {
+    stopTrackingRef.current = tracking.stopTracking
+  }, [tracking.stopTracking])
   useEffect(() => {
     onTrackingControllerReady({
       startTracking: tracking.startTracking,
@@ -123,6 +144,29 @@ export function DroneMap({
   useEffect(() => {
     isTrackingRef.current = tracking.status === 'tracking'
   }, [tracking.status])
+
+  useEffect(() => {
+    const handleQuickStop = (event: KeyboardEvent) => {
+      if (tracking.status !== 'tracking') {
+        return
+      }
+      if (isEditableEventTarget(event.target)) {
+        return
+      }
+      if (event.key !== 'Enter' && event.key !== '/') {
+        return
+      }
+      event.preventDefault()
+      tracking.stopTracking()
+      onTrackingNotice({
+        tone: 'info',
+        title: 'Tracking stopped',
+        detail: 'Quick stop via keyboard.',
+      })
+    }
+    window.addEventListener('keydown', handleQuickStop)
+    return () => window.removeEventListener('keydown', handleQuickStop)
+  }, [onTrackingNotice, tracking])
   const targetPoint = useProjectedTarget(map, selectedTarget)
   const {
     overlayProjects,
@@ -196,28 +240,28 @@ export function DroneMap({
   }, [onTrackingNotice, selectedTrackingDroneId, tracking.droneId, tracking.status])
 
   return (
-    <div className="drone-map relative h-full min-h-[420px] overflow-hidden bg-slate-900 lg:min-h-0">
+    <div className="drone-map relative h-full min-h-[420px] overflow-hidden bg-slate-100 lg:min-h-0">
       <div ref={containerRef} className="absolute inset-0" aria-label="Drone map" />
       {mapStatus !== 'ready' ? (
-        <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-slate-950/20 backdrop-blur-[1px]">
-          <div className="flex items-center gap-3 rounded-lg border border-white/20 bg-slate-950/85 px-4 py-3 text-sm text-white shadow-xl">
+        <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-white/30 backdrop-blur-[1px]">
+          <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white/95 px-4 py-3 text-sm text-slate-800 shadow-xl">
             {mapStatus === 'loading' ? (
-              <Loader2 className="size-4 animate-spin text-sky-300" aria-hidden="true" />
+              <Loader2 className="size-4 animate-spin text-sky-600" aria-hidden="true" />
             ) : (
-              <AlertTriangle className="size-4 text-amber-300" aria-hidden="true" />
+              <AlertTriangle className="size-4 text-amber-600" aria-hidden="true" />
             )}
             <span>{mapStatus === 'loading' ? 'Loading Vietnam map...' : 'Unable to load map'}</span>
           </div>
         </div>
       ) : null}
-      <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-[min(26rem,calc(100%-2rem))] rounded-lg border border-white/20 bg-slate-950/82 px-3 py-2 text-sm text-white shadow-lg backdrop-blur">
+      <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-[min(26rem,calc(100%-2rem))] rounded-lg border border-slate-200 bg-white/95 px-3 py-2 text-sm text-slate-900 shadow-lg backdrop-blur">
         <div className="flex items-center gap-2 font-semibold">
-          <MapPinned className="size-4 text-sky-300" aria-hidden="true" />
+          <MapPinned className="size-4 text-sky-600" aria-hidden="true" />
           <span>Vietnam operations map</span>
         </div>
-        <div className="mt-1 text-xs text-slate-200">
+        <div className="mt-1 text-xs text-slate-600">
           {tracking.status === 'tracking'
-            ? 'Tracking active. Map click target selection is disabled.'
+            ? 'Route tracking active. Press Enter or /, or left-click map to stop.'
             : 'Click map to set target for connected drones.'}
         </div>
       </div>
@@ -230,10 +274,10 @@ export function DroneMap({
         Focus Vietnam
       </button>
       {overlayZoom >= PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM && nearestOverlayProjects.length > 0 ? (
-        <div className="absolute left-4 top-32 z-20 w-72 rounded-lg border border-white/20 bg-slate-950/85 p-2 text-xs text-white shadow-lg backdrop-blur">
-          <div className="mb-1 font-semibold text-sky-200">Spatial Maps</div>
-          <div className="mb-2 text-[11px] text-slate-300">Nearest maps first</div>
-          <div className="max-h-36 space-y-1 overflow-y-auto border-b border-white/10 pb-2">
+        <div className="absolute left-4 top-32 z-20 w-72 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
+          <div className="mb-1 font-semibold text-sky-700">Spatial Maps</div>
+          <div className="mb-2 text-[11px] text-slate-500">Nearest maps first</div>
+          <div className="max-h-36 space-y-1 overflow-y-auto border-b border-slate-200 pb-2">
             {nearestOverlayProjects.map((project) => {
               const active = project.id === selectedOverlayProjectId
               return (
@@ -242,8 +286,8 @@ export function DroneMap({
                   type="button"
                   className={`w-full rounded border px-2 py-1 text-left ${
                     active
-                      ? 'border-sky-400/60 bg-sky-500/25 text-sky-100'
-                      : 'border-white/15 bg-slate-900/80 text-slate-200 hover:text-white'
+                      ? 'border-sky-300 bg-sky-50 text-sky-900'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900'
                   }`}
                   onClick={() => {
                     setSelectedOverlayProjectId(project.id)
@@ -255,13 +299,13 @@ export function DroneMap({
               )
             })}
           </div>
-          <div className="mt-2 text-[11px] text-slate-300">
+          <div className="mt-2 text-[11px] text-slate-500">
             {selectedOverlayProject ? selectedOverlayProject.name : 'Select a building'}
           </div>
           {selectedOverlayProject ? (
             <button
               type="button"
-              className="mt-1 w-full rounded border border-rose-500/50 bg-rose-500/15 px-2 py-1 text-left text-[11px] text-rose-100 hover:bg-rose-500/25 disabled:opacity-50"
+              className="mt-1 w-full rounded border border-rose-300 bg-rose-50 px-2 py-1 text-left text-[11px] text-rose-700 hover:bg-rose-100 disabled:opacity-50"
               onClick={handleDeleteOverlayProject}
               disabled={isDeletingOverlayProject}
             >
@@ -276,16 +320,16 @@ export function DroneMap({
                   type="button"
                   className={`w-full rounded border px-2 py-1 text-left ${
                     selectedOverlayFloorId === floor.id
-                      ? 'border-sky-400/60 bg-sky-500/25 text-sky-100'
-                      : 'border-white/15 bg-slate-900/80 text-slate-200 hover:text-white'
+                      ? 'border-sky-300 bg-sky-50 text-sky-900'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900'
                   }`}
                   onClick={() => setSelectedOverlayFloorId(floor.id)}
                 >
-                  {floor.label} <span className="text-[10px] text-slate-400">{floor.code}</span>
+                  {floor.label} <span className="text-[10px] text-slate-500">{floor.code}</span>
                 </button>
               ))
             ) : (
-              <div className="rounded border border-white/10 px-2 py-1 text-slate-300">No floor selected</div>
+              <div className="rounded border border-slate-200 px-2 py-1 text-slate-500">No floor selected</div>
             )}
           </div>
         </div>
