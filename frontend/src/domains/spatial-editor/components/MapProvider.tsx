@@ -20,11 +20,10 @@ const editorStyle: maplibregl.StyleSpecification = {
     osm: {
       type: 'raster',
       tiles: [
-        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        '/api/tiles/osm/{z}/{x}/{y}.png?scale=1',
       ],
       tileSize: 256,
+      maxzoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
     },
   },
@@ -49,7 +48,7 @@ const editorStyle: maplibregl.StyleSpecification = {
 }
 
 const spatialEditorMinZoom = 10
-const spatialEditorMaxZoom = 24
+const spatialEditorMaxZoom = 19
 
 interface MapContextValue {
   map: Map | null
@@ -116,6 +115,15 @@ export function MapProvider({ children }: MapProviderProps) {
       const handleLoad = () => {
         mapLoadedRef.current = true
         map.resize()
+        map.triggerRepaint()
+        requestAnimationFrame(() => {
+          map.resize()
+          map.triggerRepaint()
+        })
+        window.setTimeout(() => {
+          map.resize()
+          map.triggerRepaint()
+        }, 120)
         setMapLoaded(true)
         setMapReady(true)
         setMapZoom(map.getZoom())
@@ -159,6 +167,7 @@ export function MapProvider({ children }: MapProviderProps) {
 
       resizeObserverRef.current = new ResizeObserver(() => {
         map.resize()
+        map.triggerRepaint()
       })
       resizeObserverRef.current.observe(node)
     }

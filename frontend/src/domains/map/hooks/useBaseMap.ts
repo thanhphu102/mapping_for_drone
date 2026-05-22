@@ -77,35 +77,38 @@ function initialMainMapCamera(): InitialMainMapCamera {
   }
 }
 
-const rasterOsmStyle: StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: 'raster',
-      tiles: [
-        '/api/tiles/osm/{z}/{x}/{y}.png',
-      ],
-      tileSize: 256,
-      maxzoom: 19,
-      attribution: '&copy; OpenStreetMap contributors',
-    },
-  },
-  layers: [
-    {
-      id: 'background',
-      type: 'background',
-      paint: { 'background-color': '#f8fafc' },
-    },
-    {
-      id: 'osm',
-      type: 'raster',
-      source: 'osm',
-      paint: {
-        'raster-fade-duration': 0,
-        'raster-resampling': 'nearest',
+function createRasterOsmStyle(useRetinaTiles: boolean): StyleSpecification {
+  const tileScale = useRetinaTiles ? 2 : 1
+  return {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: [
+          `/api/tiles/osm/{z}/{x}/{y}.png?scale=${tileScale}`,
+        ],
+        tileSize: useRetinaTiles ? 512 : 256,
+        maxzoom: 19,
+        attribution: '&copy; OpenStreetMap contributors',
       },
     },
-  ],
+    layers: [
+      {
+        id: 'background',
+        type: 'background',
+        paint: { 'background-color': '#f8fafc' },
+      },
+      {
+        id: 'osm',
+        type: 'raster',
+        source: 'osm',
+        paint: {
+          'raster-fade-duration': 0,
+          'raster-resampling': 'linear',
+        },
+      },
+    ],
+  }
 }
 
 interface MapLibreWithSupport {
@@ -131,9 +134,10 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
     }
 
     const initialCamera = initialMainMapCamera()
+    const useRetinaTiles = window.devicePixelRatio >= 1.25
     const mapInstance = new maplibregl.Map({
       container: containerRef.current,
-      style: rasterOsmStyle,
+      style: createRasterOsmStyle(useRetinaTiles),
       center: initialCamera.camera.center,
       zoom: initialCamera.camera.zoom,
       maxZoom: 19,
