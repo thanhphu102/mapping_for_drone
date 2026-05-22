@@ -4,6 +4,7 @@ from typing import Any
 
 class ImportObjectRef(BaseModel):
     projectId: str | None = None
+    objectId: str | None = None
     osmType: str | None = None
     osmId: int | str | None = None
     name: str | None = None
@@ -26,6 +27,14 @@ class ImportScanCommitRequest(ImportScanPreviewRequest):
     confirm: bool = False
 
 
+class ImportPolygonItem(BaseModel):
+    name: str | None = None
+    externalId: str | None = None
+    tag: str | None = None
+    note: str | None = None
+    coordinates: list[list[float]]
+
+
 class ImportScanPreviewResponse(BaseModel):
     objectId: str | None = None
     floorId: str | None = None
@@ -34,4 +43,3 @@ class ImportScanPreviewResponse(BaseModel):
     invalidRooms: int = 0
     warnings: list[str] = Field(default_factory=list)
     previewFeatures: list[dict[str, Any]] = Field(default_factory=list)
-

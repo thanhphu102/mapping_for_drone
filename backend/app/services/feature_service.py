@@ -8,6 +8,8 @@ from fastapi import HTTPException
 from ..core.time import now_ts
 from . import geometry_service
 
+DEFAULT_OBJECT_ID = "object-default"
+
 
 class FeatureService:
     def list_features(
@@ -26,7 +28,9 @@ class FeatureService:
 
         geometry_service.validate_feature_inside_boundary(feature, base_geometry)
 
-        floor_id = feature.get("properties", {}).get("floorId")
+        floor_id = feature.get("floorId")
+        if floor_id is None:
+            floor_id = feature.get("properties", {}).get("floorId")
         if floor_id:
             floors = project.get("floors", [])
             has_floor = any(
@@ -42,11 +46,19 @@ class FeatureService:
         next_feature.setdefault("id", str(uuid4()))
         if not isinstance(next_feature.get("properties"), dict):
             next_feature["properties"] = {}
+        next_feature.setdefault("projectId", None)
+        next_feature.setdefault("objectId", DEFAULT_OBJECT_ID)
+        floor_id = next_feature.get("floorId")
+        if floor_id is None:
+            floor_id = next_feature["properties"].get("floorId")
+            next_feature["floorId"] = floor_id
+        next_feature["properties"]["floorId"] = floor_id
         return next_feature
 
     def upsert_feature(self, project: dict[str, Any], feature: dict[str, Any]) -> dict[str, Any]:
         self.validate_feature_for_project(project, feature)
         next_feature = self.normalize_feature(feature)
+        next_feature["projectId"] = project.get("id")
         next_feature["properties"]["updatedAt"] = now_ts()
         features = self.list_features(project)
         existing_index = next(
@@ -70,6 +82,7 @@ class FeatureService:
         for feature in features:
             self.validate_feature_for_project(project, feature)
             next_feature = self.normalize_feature(feature)
+            next_feature["projectId"] = project.get("id")
             next_feature["properties"]["updatedAt"] = now_ts()
             self.list_features(project).append(next_feature)
             added.append(next_feature)
@@ -82,6 +95,7 @@ class FeatureService:
         for feature in features:
             self.validate_feature_for_project(project, feature)
             next_feature = self.normalize_feature(feature)
+            next_feature["projectId"] = project.get("id")
             next_feature["properties"]["updatedAt"] = now_ts()
             normalized_features.append(next_feature)
 
@@ -126,7 +140,10 @@ class FeatureService:
             geometry = feature.get("geometry")
             if not isinstance(geometry, dict):
                 continue
-            if floor_id and str(properties.get("floorId") or "") != floor_id:
+            feature_floor_id = feature.get("floorId")
+            if feature_floor_id is None:
+                feature_floor_id = properties.get("floorId")
+            if floor_id and str(feature_floor_id or "") != floor_id:
                 continue
             feature_min_zoom = float(properties.get("minZoom", 0))
             feature_max_zoom = float(properties.get("maxZoom", 24))
@@ -136,4 +153,3 @@ class FeatureService:
             if feature_bbox and geometry_service.bbox_intersects(feature_bbox, bbox):
                 visible_features.append(feature)
         return visible_features
-
