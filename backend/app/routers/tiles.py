@@ -18,9 +18,9 @@ class TileCacheItem(NamedTuple):
 
 
 _TILE_CACHE_MAX_ITEMS = 2048
-_tile_cache: "OrderedDict[tuple[int, int, int], TileCacheItem]" = OrderedDict()
+_tile_cache: "OrderedDict[tuple[int, int, int, int], TileCacheItem]" = OrderedDict()
 _tile_cache_lock = Lock()
-_inflight_tile_requests: dict[tuple[int, int, int], asyncio.Future[TileCacheItem]] = {}
+_inflight_tile_requests: dict[tuple[int, int, int, int], asyncio.Future[TileCacheItem]] = {}
 _inflight_tile_lock = asyncio.Lock()
 
 _tile_http_client = httpx.AsyncClient(
@@ -37,7 +37,7 @@ async def get_storage_status():
 
 
 @router.get("/api/tiles/osm/{z}/{x}/{y}.png")
-async def proxy_osm_tile(z: str, x: str, y: str):
+async def proxy_osm_tile(z: str, x: str, y: str, scale: int = 1):
     try:
         z_value = int(z)
         x_value = int(x)
@@ -56,7 +56,10 @@ async def proxy_osm_tile(z: str, x: str, y: str):
     # Normalize x so zoomed-out panning does not produce proxy 400s/blank tiles.
     x_value = x_value % tile_count
 
-    cache_key = (z_value, x_value, y_value)
+    if scale not in (1, 2):
+        raise HTTPException(status_code=400, detail="Invalid tile scale")
+
+    cache_key = (z_value, x_value, y_value, scale)
     with _tile_cache_lock:
         cached = _tile_cache.get(cache_key)
         if cached is not None:
@@ -78,7 +81,8 @@ async def proxy_osm_tile(z: str, x: str, y: str):
             created = True
 
     if created:
-        tile_url = f"https://tile.openstreetmap.org/{z_value}/{x_value}/{y_value}.png"
+        tile_suffix = "@2x.png" if scale == 2 else ".png"
+        tile_url = f"https://tile.openstreetmap.org/{z_value}/{x_value}/{y_value}{tile_suffix}"
         try:
             upstream = await _tile_http_client.get(tile_url)
             upstream.raise_for_status()
