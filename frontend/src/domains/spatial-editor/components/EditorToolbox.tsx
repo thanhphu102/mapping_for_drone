@@ -66,7 +66,7 @@ export function EditorToolbox({
         <span className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-medium text-slate-700">
           Tool: {activeTool?.label ?? 'Select'}
         </span>
-        <span className="text-slate-500">Hold Shift: Square/Circle</span>
+        <span className="text-slate-500">Draw</span>
       </div>
       <div className="max-w-full overflow-x-auto overflow-y-visible">
         <div className="flex w-max min-w-full items-center gap-1.5">

@@ -67,7 +67,7 @@ export function OsmEnclosingPanel({
         <div>
           <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
             <Layers3 className="size-4 text-sky-600" aria-hidden="true" />
-            OSM Enclosing Elements
+            Choose area
           </h2>
           {target ? (
             <p className="mt-1 flex items-center gap-1.5 font-mono text-xs text-slate-500">
@@ -129,9 +129,8 @@ export function OsmEnclosingPanel({
                       {candidate.label}
                     </div>
                     <div className="mt-1 text-slate-600">
-                      {candidate.type} {candidate.id}
+                      {candidate.category}
                     </div>
-                    <div className="text-slate-500">{candidate.category}</div>
                   </button>
                   {isSelected ? (
                     <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -150,9 +149,7 @@ export function OsmEnclosingPanel({
                         <>
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-xs font-semibold uppercase text-slate-500">
-                                Detected mode
-                              </div>
+                              <div className="text-xs font-semibold uppercase text-slate-500">Area type</div>
                               <div className="mt-1 text-sm font-semibold capitalize text-slate-950">
                                 {effectiveEditorMode}
                               </div>
@@ -162,14 +159,6 @@ export function OsmEnclosingPanel({
                             </div>
                           </div>
                           <div className="mt-2 space-y-1 text-xs text-slate-600">
-                            <div>
-                              <span className="font-semibold text-slate-700">Reason:</span>{' '}
-                              {candidateGeometry.classification.reason}
-                            </div>
-                            <div>
-                              <span className="font-semibold text-slate-700">Boundary:</span>{' '}
-                              {candidate.type} {candidate.id}
-                            </div>
                             <div>
                               <span className="font-semibold text-slate-700">Perimeter:</span>{' '}
                               {(candidateGeometry.perimeterM / 1000).toFixed(2)} km
@@ -188,9 +177,7 @@ export function OsmEnclosingPanel({
                             </div>
                           ) : null}
                           <div className="mt-3">
-                            <div className="text-xs font-semibold uppercase text-slate-500">
-                              Change mode
-                            </div>
+                            <div className="text-xs font-semibold uppercase text-slate-500">Use as</div>
                             <div className="mt-2 flex flex-wrap gap-2">
                               {editorModes.map((mode) => (
                                 <button
@@ -208,6 +195,19 @@ export function OsmEnclosingPanel({
                               ))}
                             </div>
                           </div>
+                          <details className="mt-3 rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600">
+                            <summary className="cursor-pointer font-medium text-slate-700">More details</summary>
+                            <div className="mt-2 space-y-1">
+                              <div>
+                                <span className="font-semibold text-slate-700">Reason:</span>{' '}
+                                {candidateGeometry.classification.reason}
+                              </div>
+                              <div>
+                                <span className="font-semibold text-slate-700">Source:</span>{' '}
+                                {candidate.type} {candidate.id}
+                              </div>
+                            </div>
+                          </details>
                           <button
                             type="button"
                             className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"

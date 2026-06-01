@@ -3,6 +3,11 @@ import type { Feature, FeatureCollection, Geometry } from 'geojson'
 import type { FilterSpecification, GeoJSONSource, Map } from 'maplibre-gl'
 import type { DrawingProject, ProjectCanvasConfig } from '../types'
 import type { SnapPreview } from './useSnapEngine'
+import type { EditorBackdropMode } from '../editorBackdropMode'
+import {
+  GOOGLE_HYBRID_LAYER_ID,
+  GOOGLE_STREETS_LAYER_ID,
+} from '../../map/baseMapModes'
 
 const boundarySourceId = 'base-boundary'
 const featureSourceId = 'project-features'
@@ -81,6 +86,7 @@ interface UseMapRendererOptions {
   mapZoom: number
   project: DrawingProject | null
   projectConfig: ProjectCanvasConfig
+  backdropMode: EditorBackdropMode
   visibleFeatures: Feature[]
   selectedFeatureIds: string[]
   draftCollection: GeoJSON.FeatureCollection | null
@@ -97,6 +103,7 @@ export function useMapRenderer({
   mapZoom,
   project,
   projectConfig,
+  backdropMode,
   visibleFeatures,
   selectedFeatureIds,
   draftCollection: _draftCollection,
@@ -164,9 +171,17 @@ export function useMapRenderer({
         id: baseBoundaryFillLayerId,
         type: 'fill',
         source: boundarySourceId,
-        paint: { 'fill-color': '#ffffff', 'fill-opacity': 1 },
+        paint: {
+          'fill-color': '#ffffff',
+          'fill-opacity': backdropMode === 'white' ? 1 : 0,
+        },
       })
     }
+    map.setPaintProperty(
+      baseBoundaryFillLayerId,
+      'fill-opacity',
+      backdropMode === 'white' ? 1 : 0,
+    )
 
     if (!map.getLayer(baseBoundaryOutlineLayerId)) {
       map.addLayer({
@@ -254,7 +269,7 @@ export function useMapRenderer({
         onMessage('Base boundary rendered')
       }
     })
-  }, [mapReady, mapLoaded, project, projectConfig.canvasMode, map, isMounted, onBoundaryRendered, onMessage])
+  }, [mapReady, mapLoaded, project, projectConfig.canvasMode, backdropMode, map, isMounted, onBoundaryRendered, onMessage])
 
   useEffect(() => {
     if (!map || !project) {
@@ -287,7 +302,7 @@ export function useMapRenderer({
     }
   }, [map, mapLoaded, project, selectedFeatureIds])
 
-  // --- Precision mode: fade raster tiles at deep zoom ---
+  // Keep the editor basemap readable while allowing a white or map-backed canvas.
   useEffect(() => {
     if (!map || !project) {
       return
@@ -298,11 +313,18 @@ export function useMapRenderer({
 
     const currentZoom = map.getZoom()
     const isPrecision = currentZoom >= projectConfig.precisionZoom
-    const osmLayerId = 'editor-osm-basemap'
-    const osmLayer = map.getLayer(osmLayerId)
-    if (osmLayer) {
-      map.setPaintProperty(osmLayerId, 'raster-opacity', isPrecision ? 0.2 : 0.28)
-    }
+    const streetsOpacity = backdropMode === 'white'
+      ? (isPrecision ? 0.26 : 0.46)
+      : (isPrecision ? 0.5 : 0.72)
+    const hybridOpacity = backdropMode === 'white'
+      ? (isPrecision ? 0.22 : 0.42)
+      : (isPrecision ? 0.46 : 0.66)
 
-  }, [map, mapLoaded, project, projectConfig.precisionZoom, mapReady, mapZoom])
+    if (map.getLayer(GOOGLE_STREETS_LAYER_ID)) {
+      map.setPaintProperty(GOOGLE_STREETS_LAYER_ID, 'raster-opacity', streetsOpacity)
+    }
+    if (map.getLayer(GOOGLE_HYBRID_LAYER_ID)) {
+      map.setPaintProperty(GOOGLE_HYBRID_LAYER_ID, 'raster-opacity', hybridOpacity)
+    }
+  }, [backdropMode, map, mapLoaded, mapReady, mapZoom, project, projectConfig.precisionZoom])
 }

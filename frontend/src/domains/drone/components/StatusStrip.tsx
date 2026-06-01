@@ -55,57 +55,37 @@ export function StatusStrip({
     : connectionStatus === 'connecting'
       ? 'border-amber-200 bg-amber-50 text-amber-700'
       : 'border-rose-200 bg-rose-50 text-rose-700'
+  const commandTone = commandStatus === 'success'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    : commandStatus === 'error'
+      ? 'border-rose-200 bg-rose-50 text-rose-700'
+      : commandStatus === 'sending'
+        ? 'border-sky-200 bg-sky-50 text-sky-700'
+        : 'border-slate-200 bg-slate-50 text-slate-700'
 
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-          <ConnectionIcon
-            className={isOnline ? 'size-4 text-sky-600' : 'size-4 text-rose-600'}
-            aria-hidden="true"
-          />
-          Telemetry
-        </div>
-        <div className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-sm font-semibold ${connectionTone}`}>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold ${connectionTone}`}>
+          <ConnectionIcon className="size-4" aria-hidden="true" />
           {connectionLabel(connectionStatus)}
-        </div>
-        <p className="mt-1 truncate text-xs text-slate-500" title={connectionMessage}>
-          {connectionMessage}
-        </p>
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+        </span>
+        <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-800">
           <RadioTower className="size-4 text-sky-600" aria-hidden="true" />
-          Drones
-        </div>
-        <div className="mt-2 text-lg font-semibold text-slate-950">
-          {connectedCount}
-        </div>
-        <p className="mt-1 text-xs text-slate-500">Connected now</p>
-      </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+          {connectedCount} drone{connectedCount === 1 ? '' : 's'}
+        </span>
+        <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-800">
           <BatteryMedium className="size-4 text-sky-600" aria-hidden="true" />
-          Battery
-        </div>
-        <div className="mt-2 text-lg font-semibold text-slate-950">
-          {averageBattery}
-        </div>
-        <p className="mt-1 text-xs text-slate-500">Fleet average</p>
+          Avg battery {averageBattery}
+        </span>
+        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold ${commandTone}`}>
+          <Send className="size-4" aria-hidden="true" />
+          Command {commandStatusLabel(commandStatus)}
+        </span>
       </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-          <Send className="size-4 text-sky-600" aria-hidden="true" />
-          Command
-        </div>
-        <div className="mt-2 text-lg font-semibold text-slate-950">
-          {commandStatusLabel(commandStatus)}
-        </div>
-        <p className="mt-1 text-xs text-slate-500">Map target flow</p>
-      </div>
-    </div>
+      <p className="mt-3 text-sm text-slate-500" title={connectionMessage}>
+        {connectionMessage}
+      </p>
+    </section>
   )
 }

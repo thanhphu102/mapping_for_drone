@@ -1,4 +1,4 @@
-import { Activity, ChevronLeft, ChevronRight, MapPinned, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { ChevronLeft, ChevronRight, MapPinned, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useState } from 'react'
 import { DroneMap } from '../domains/map/components/DroneMap'
 import { DroneTable } from '../domains/drone/components/DroneTable'
@@ -155,17 +155,14 @@ export function AppShell({
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-sky-700">
               <MapPinned className="size-4" aria-hidden="true" />
-              Swarm GSC
+              Drone map
             </div>
             <h1 className="mt-1 text-xl font-semibold text-slate-950">
-              Vietnam Drone Control
+              Flight control
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Flight coordination and field mapping
+              Choose a drone, pick a point on the map, then fetch or edit an area.
             </p>
-          </div>
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-700">
-            <Activity className="size-5" aria-hidden="true" />
           </div>
         </div>
       </div>
@@ -186,10 +183,10 @@ export function AppShell({
                 id="drone-table-heading"
                 className="text-sm font-semibold text-slate-950"
               >
-                Connected Drones
+                Drones
               </h2>
               <p className="text-sm text-slate-500">
-                Live position and battery telemetry
+                Select a drone to track or review.
               </p>
             </div>
             <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
@@ -220,7 +217,7 @@ export function AppShell({
 
         <details className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <summary className="cursor-pointer text-sm font-semibold text-slate-900">
-            More
+            Status details
           </summary>
           <section
             className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3"
@@ -228,7 +225,7 @@ export function AppShell({
           >
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-slate-950">
-                Command Status
+                Command
               </h2>
               <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold capitalize text-slate-600">
                 {commandStatusLabel(commandStatus)}
@@ -250,7 +247,7 @@ export function AppShell({
 
   return (
     <div className="min-h-screen h-dvh bg-slate-100 text-slate-950">
-      <div className="flex h-full flex-col lg:flex-row">
+      <div className="flex h-full flex-col">
         <main className="relative min-h-0 flex-1">
           <DroneMap
             dronesById={dronesById}
@@ -280,27 +277,26 @@ export function AppShell({
             <PanelRightOpen className="size-3.5" />
             Panel
           </button>
-        </main>
-
-        <aside className={`hidden lg:flex lg:h-full lg:max-h-none lg:flex-col lg:border-l lg:border-slate-200 lg:bg-slate-50 lg:transition-all ${
-          isDesktopCollapsed ? 'lg:w-[68px]' : 'lg:w-[460px]'
-        }`}>
-          <div className="border-b border-slate-200 bg-white px-2 py-2">
-            <button
-              type="button"
-              className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              onClick={() => setDesktopSidebarCollapsed((current) => !current)}
+          <aside className="absolute inset-y-0 right-0 z-30 hidden w-[424px] overflow-visible lg:block">
+            <div
+              className={`absolute inset-y-0 right-0 flex w-[424px] transform-gpu items-center justify-end will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                isDesktopCollapsed ? 'translate-x-[400px]' : 'translate-x-0'
+              }`}
             >
-              {isDesktopCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-              {isDesktopCollapsed ? 'Open' : 'Collapse'}
-            </button>
-          </div>
-          {isDesktopCollapsed ? (
-            <div className="flex flex-1 items-center justify-center">
-              <PanelRightOpen className="size-5 text-slate-400" />
+              <button
+                type="button"
+                className="mr-[-1px] flex h-14 w-6 items-center justify-center rounded-l-full border border-slate-200/80 border-r-0 bg-white/96 text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
+                onClick={() => setDesktopSidebarCollapsed((current) => !current)}
+                aria-label={isDesktopCollapsed ? 'Open panel' : 'Collapse panel'}
+              >
+                {isDesktopCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              </button>
+              <div className="h-full w-[400px] overflow-hidden border-l border-slate-200 bg-slate-50 shadow-[0_12px_40px_rgba(15,23,42,0.14)]">
+                {sidebarContent}
+              </div>
             </div>
-          ) : sidebarContent}
-        </aside>
+          </aside>
+        </main>
       </div>
 
       {isMobileDrawerOpen ? (

@@ -8,31 +8,46 @@ import {
   type ReactNode,
 } from 'react'
 import maplibregl, { type Map } from 'maplibre-gl'
+import {
+  GOOGLE_HYBRID_LAYER_ID,
+  GOOGLE_HYBRID_SOURCE_ID,
+  GOOGLE_RASTER_MAX_ZOOM,
+  GOOGLE_STREETS_LAYER_ID,
+  GOOGLE_STREETS_SOURCE_ID,
+  googleRasterTileScale,
+  readStoredGoogleBaseMapMode,
+  setGoogleBaseMapLayerVisibility,
+  writeStoredGoogleBaseMapMode,
+  type GoogleBaseMapMode,
+} from '../../map/baseMapModes'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function useMapContext() {
   return useContext(MapContext)
 }
 
-const googleRasterMaxZoom = 21
-
-function googleRasterTileScale() {
-  return window.devicePixelRatio >= 1.25 ? 2 : 1
-}
-
-function createEditorStyle(): maplibregl.StyleSpecification {
+function createEditorStyle(mode: GoogleBaseMapMode): maplibregl.StyleSpecification {
   const tileScale = googleRasterTileScale()
 
   return {
     version: 8,
     sources: {
-      googleHybrid: {
+      [GOOGLE_STREETS_SOURCE_ID]: {
+        type: 'raster',
+        tiles: [
+          `/api/tiles/google/streets/{z}/{x}/{y}.png?scale=${tileScale}`,
+        ],
+        tileSize: 256,
+        maxzoom: GOOGLE_RASTER_MAX_ZOOM,
+        attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
+      },
+      [GOOGLE_HYBRID_SOURCE_ID]: {
         type: 'raster',
         tiles: [
           `/api/tiles/google/hybrid/{z}/{x}/{y}.png?scale=${tileScale}`,
         ],
         tileSize: 256,
-        maxzoom: googleRasterMaxZoom,
+        maxzoom: GOOGLE_RASTER_MAX_ZOOM,
         attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
       },
     },
@@ -43,9 +58,27 @@ function createEditorStyle(): maplibregl.StyleSpecification {
         paint: { 'background-color': '#e5e7eb' },
       },
       {
-        id: 'editor-google-hybrid-basemap',
+        id: GOOGLE_STREETS_LAYER_ID,
         type: 'raster',
-        source: 'googleHybrid',
+        source: GOOGLE_STREETS_SOURCE_ID,
+        layout: {
+          visibility: mode === 'map' ? 'visible' : 'none',
+        },
+        paint: {
+          'raster-opacity': 0.46,
+          'raster-saturation': -0.5,
+          'raster-brightness-min': 0.14,
+          'raster-brightness-max': 0.96,
+          'raster-resampling': 'linear',
+        },
+      },
+      {
+        id: GOOGLE_HYBRID_LAYER_ID,
+        type: 'raster',
+        source: GOOGLE_HYBRID_SOURCE_ID,
+        layout: {
+          visibility: mode === 'satellite' ? 'visible' : 'none',
+        },
         paint: {
           'raster-opacity': 0.42,
           'raster-saturation': -0.2,
@@ -59,13 +92,15 @@ function createEditorStyle(): maplibregl.StyleSpecification {
 }
 
 const spatialEditorMinZoom = 10
-const spatialEditorMaxZoom = googleRasterMaxZoom
+const spatialEditorMaxZoom = GOOGLE_RASTER_MAX_ZOOM
 
 interface MapContextValue {
   map: Map | null
   mapReady: boolean
   mapLoaded: boolean
   mapZoom: number
+  baseMapMode: GoogleBaseMapMode
+  setBaseMapMode: (mode: GoogleBaseMapMode) => void
   containerRef: (node: HTMLDivElement | null) => void
 }
 
@@ -74,6 +109,8 @@ const MapContext = createContext<MapContextValue>({
   mapReady: false,
   mapLoaded: false,
   mapZoom: 0,
+  baseMapMode: 'map',
+  setBaseMapMode: () => { },
   containerRef: () => { },
 })
 
@@ -92,6 +129,9 @@ export function MapProvider({ children }: MapProviderProps) {
   const [mapReady, setMapReady] = useState(false)
   const [mapLoaded, setMapLoaded] = useState(false)
   const [mapZoom, setMapZoom] = useState(0)
+  const [baseMapMode, setBaseMapMode] = useState<GoogleBaseMapMode>(
+    readStoredGoogleBaseMapMode,
+  )
 
   // Callback ref for the map container div
   const containerRef = useCallback((node: HTMLDivElement | null) => {
@@ -106,7 +146,7 @@ export function MapProvider({ children }: MapProviderProps) {
     if (node && !mapInstanceRef.current) {
       const map = new maplibregl.Map({
         container: node,
-        style: createEditorStyle(),
+        style: createEditorStyle(readStoredGoogleBaseMapMode()),
         center: [106.70098, 10.77689],
         zoom: 14,
         minZoom: spatialEditorMinZoom,
@@ -185,6 +225,28 @@ export function MapProvider({ children }: MapProviderProps) {
   }, [])
 
   useEffect(() => {
+    const map = mapInstanceRef.current
+    if (!map) {
+      return
+    }
+
+    const applyBaseMapMode = () => {
+      setGoogleBaseMapLayerVisibility(map, baseMapMode)
+      writeStoredGoogleBaseMapMode(baseMapMode)
+    }
+
+    if (map.isStyleLoaded()) {
+      applyBaseMapMode()
+    } else {
+      map.once('load', applyBaseMapMode)
+    }
+
+    return () => {
+      map.off('load', applyBaseMapMode)
+    }
+  }, [baseMapMode])
+
+  useEffect(() => {
     isMountedRef.current = true
     return () => {
       isMountedRef.current = false
@@ -205,6 +267,8 @@ export function MapProvider({ children }: MapProviderProps) {
         mapReady,
         mapLoaded,
         mapZoom,
+        baseMapMode,
+        setBaseMapMode,
         containerRef,
       }}
     >

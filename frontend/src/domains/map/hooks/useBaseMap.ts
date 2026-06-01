@@ -11,6 +11,18 @@ import {
   type StoredMainMapCamera,
   writeStoredMainMapCamera,
 } from '../utils/mainMapCamera'
+import {
+  GOOGLE_HYBRID_LAYER_ID,
+  GOOGLE_HYBRID_SOURCE_ID,
+  GOOGLE_RASTER_MAX_ZOOM,
+  GOOGLE_STREETS_LAYER_ID,
+  GOOGLE_STREETS_SOURCE_ID,
+  googleRasterTileScale,
+  readStoredGoogleBaseMapMode,
+  setGoogleBaseMapLayerVisibility,
+  writeStoredGoogleBaseMapMode,
+  type GoogleBaseMapMode,
+} from '../baseMapModes'
 
 export const VIETNAM_MAP_CENTER: [number, number] = [108.2772, 14.0583]
 export const VIETNAM_OVERVIEW_BOUNDS: [[number, number], [number, number]] = [
@@ -19,7 +31,6 @@ export const VIETNAM_OVERVIEW_BOUNDS: [[number, number], [number, number]] = [
 ]
 export const VIETNAM_DEFAULT_ZOOM = 4.85
 export const VIETNAM_FOCUS_ZOOM = 5.1
-const GOOGLE_RASTER_MAX_ZOOM = 21
 
 interface InitialMainMapCamera {
   camera: StoredMainMapCamera
@@ -78,17 +89,22 @@ function initialMainMapCamera(): InitialMainMapCamera {
   }
 }
 
-function googleRasterTileScale() {
-  return window.devicePixelRatio >= 1.25 ? 2 : 1
-}
-
-function createRasterGoogleHybridStyle(): StyleSpecification {
+function createGoogleRasterStyle(mode: GoogleBaseMapMode): StyleSpecification {
   const tileScale = googleRasterTileScale()
 
   return {
     version: 8,
     sources: {
-      googleHybrid: {
+      [GOOGLE_STREETS_SOURCE_ID]: {
+        type: 'raster',
+        tiles: [
+          `/api/tiles/google/streets/{z}/{x}/{y}.png?scale=${tileScale}`,
+        ],
+        tileSize: 256,
+        maxzoom: GOOGLE_RASTER_MAX_ZOOM,
+        attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
+      },
+      [GOOGLE_HYBRID_SOURCE_ID]: {
         type: 'raster',
         tiles: [
           `/api/tiles/google/hybrid/{z}/{x}/{y}.png?scale=${tileScale}`,
@@ -105,9 +121,24 @@ function createRasterGoogleHybridStyle(): StyleSpecification {
         paint: { 'background-color': '#f8fafc' },
       },
       {
-        id: 'google-hybrid',
+        id: GOOGLE_STREETS_LAYER_ID,
         type: 'raster',
-        source: 'googleHybrid',
+        source: GOOGLE_STREETS_SOURCE_ID,
+        layout: {
+          visibility: mode === 'map' ? 'visible' : 'none',
+        },
+        paint: {
+          'raster-fade-duration': 0,
+          'raster-resampling': 'linear',
+        },
+      },
+      {
+        id: GOOGLE_HYBRID_LAYER_ID,
+        type: 'raster',
+        source: GOOGLE_HYBRID_SOURCE_ID,
+        layout: {
+          visibility: mode === 'satellite' ? 'visible' : 'none',
+        },
         paint: {
           'raster-fade-duration': 0,
           'raster-resampling': 'linear',
@@ -128,6 +159,9 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
   const onTargetSelectRef = useRef(onTargetSelect)
   const mapReadyRef = useRef(false)
   const [map, setMap] = useState<Map | null>(null)
+  const [baseMapMode, setBaseMapMode] = useState<GoogleBaseMapMode>(
+    readStoredGoogleBaseMapMode,
+  )
   const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
@@ -140,9 +174,10 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
     }
 
     const initialCamera = initialMainMapCamera()
+    const initialBaseMapMode = readStoredGoogleBaseMapMode()
     const mapInstance = new maplibregl.Map({
       container: containerRef.current,
-      style: createRasterGoogleHybridStyle(),
+      style: createGoogleRasterStyle(initialBaseMapMode),
       center: initialCamera.camera.center,
       zoom: initialCamera.camera.zoom,
       maxZoom: GOOGLE_RASTER_MAX_ZOOM,
@@ -244,7 +279,10 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
 
     const handleError = (event: unknown) => {
       const maybeError = event as { error?: unknown; sourceId?: string }
-      if (maybeError.sourceId === 'googleHybrid') {
+      if (
+        maybeError.sourceId === GOOGLE_STREETS_SOURCE_ID ||
+        maybeError.sourceId === GOOGLE_HYBRID_SOURCE_ID
+      ) {
         return
       }
       // MapLibre can emit recoverable source/tile runtime errors.
@@ -317,10 +355,33 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
     }
   }, [])
 
+  useEffect(() => {
+    if (!map) {
+      return
+    }
+
+    const applyBaseMapMode = () => {
+      setGoogleBaseMapLayerVisibility(map, baseMapMode)
+      writeStoredGoogleBaseMapMode(baseMapMode)
+    }
+
+    if (map.isStyleLoaded()) {
+      applyBaseMapMode()
+    } else {
+      map.once('load', applyBaseMapMode)
+    }
+
+    return () => {
+      map.off('load', applyBaseMapMode)
+    }
+  }, [baseMapMode, map])
+
   return {
     containerRef,
     map,
     mapStatus,
+    baseMapMode,
+    setBaseMapMode,
   }
 }
 

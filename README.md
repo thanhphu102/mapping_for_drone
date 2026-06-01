@@ -55,7 +55,7 @@ python3 drone_sim.py --id drone2 --port 9002  # add more drones
 
 ## Features
 
-✅ **Interactive Map** - MapLibre GL JS map with Google hybrid satellite raster tiles
+✅ **Interactive Map** - MapLibre GL JS map with Google map/satellite raster layers
 ✅ **Drone Status Table** - Real-time list of connected drones with position and battery
 ✅ **WebSocket Telemetry** - Live drone positions streamed to frontend
 ✅ **Swarm Commands** - Click map → send target to all/selected drones

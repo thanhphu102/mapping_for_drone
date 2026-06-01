@@ -76,7 +76,7 @@ export function EditorStructurePanel({
       <header className="border-b border-slate-200 px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
           <Building2 className="size-4 text-sky-600" aria-hidden="true" />
-          Structure
+          Project
         </div>
         <h2 className="mt-1 truncate text-base font-semibold text-slate-900">{project?.name ?? 'Loading project...'}</h2>
       </header>
@@ -200,22 +200,25 @@ export function EditorStructurePanel({
         </div>
       </section>
 
-      <section className="border-b border-slate-200 px-4 py-3">
-        <ImportScanJsonPanel
-          disabled={!project}
-          preview={importPreview}
-          error={importError}
-          loading={importLoading}
-          onPreview={onPreviewImport}
-          onCommit={onCommitImport}
-          onUnpreview={onUnpreviewImport}
-        />
-      </section>
+      <details className="border-b border-slate-200 px-4 py-3">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Import
+        </summary>
+        <div className="mt-3">
+          <ImportScanJsonPanel
+            disabled={!project}
+            preview={importPreview}
+            error={importError}
+            loading={importLoading}
+            onPreview={onPreviewImport}
+            onCommit={onCommitImport}
+            onUnpreview={onUnpreviewImport}
+          />
+        </div>
+      </details>
 
       <section className="min-h-0 flex-1 p-4">
-        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Objects
-        </div>
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Objects</div>
         <div className="relative mb-2">
           <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-slate-400" />
           <input

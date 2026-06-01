@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { Geometry } from 'geojson'
-import { AlertTriangle, Loader2, MapPinned, Navigation } from 'lucide-react'
+import { AlertTriangle, Loader2, Navigation } from 'lucide-react'
 import {
   fitVietnamOverview,
   useBaseMap,
 } from '../hooks/useBaseMap'
+import { GoogleBaseMapPicker } from './GoogleBaseMapPicker'
 import { PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM } from '../layers/overlayLayers'
 import { useOsmPreviewLayers } from '../hooks/useOsmPreviewLayers'
 import { useOverlaySelection } from '../hooks/useOverlaySelection'
@@ -100,7 +101,13 @@ export function DroneMap({
     }
     onTargetSelect(target)
   }, [onTargetSelect, onTrackingNotice])
-  const { containerRef, map, mapStatus } = useBaseMap(handleMapTargetSelect)
+  const {
+    containerRef,
+    map,
+    mapStatus,
+    baseMapMode,
+    setBaseMapMode,
+  } = useBaseMap(handleMapTargetSelect)
   const tracking = useDroneTracking({
     map,
     onNotice: onTrackingNotice,
@@ -254,29 +261,22 @@ export function DroneMap({
           </div>
         </div>
       ) : null}
-      <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-[min(26rem,calc(100%-2rem))] rounded-lg border border-slate-200 bg-white/95 px-3 py-2 text-sm text-slate-900 shadow-lg backdrop-blur">
-        <div className="flex items-center gap-2 font-semibold">
-          <MapPinned className="size-4 text-sky-600" aria-hidden="true" />
-          <span>Vietnam operations map</span>
-        </div>
-        <div className="mt-1 text-xs text-slate-600">
-          {tracking.status === 'tracking'
-            ? 'Route tracking active. Press Enter or /, or left-click map to stop.'
-            : 'Click map to set target for connected drones.'}
-        </div>
-      </div>
       <button
         type="button"
-        className="absolute left-4 top-20 z-20 inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+        className="absolute left-4 top-4 z-20 inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
         onClick={handleFocusVietnam}
       >
         <Navigation className="size-3.5" aria-hidden="true" />
-        Focus Vietnam
+        Reset view
       </button>
+      <GoogleBaseMapPicker
+        mode={baseMapMode}
+        onChange={setBaseMapMode}
+        className="absolute bottom-4 left-4 z-20"
+      />
       {overlayZoom >= PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM && nearestOverlayProjects.length > 0 ? (
-        <div className="absolute left-4 top-32 z-20 w-72 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
-          <div className="mb-1 font-semibold text-sky-700">Spatial Maps</div>
-          <div className="mb-2 text-[11px] text-slate-500">Nearest maps first</div>
+        <div className="absolute left-4 top-16 z-20 w-72 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
+          <div className="mb-2 font-semibold text-slate-900">Saved maps nearby</div>
           <div className="max-h-36 space-y-1 overflow-y-auto border-b border-slate-200 pb-2">
             {nearestOverlayProjects.map((project) => {
               const active = project.id === selectedOverlayProjectId
@@ -300,7 +300,7 @@ export function DroneMap({
             })}
           </div>
           <div className="mt-2 text-[11px] text-slate-500">
-            {selectedOverlayProject ? selectedOverlayProject.name : 'Select a building'}
+            {selectedOverlayProject ? selectedOverlayProject.name : 'Select a map'}
           </div>
           {selectedOverlayProject ? (
             <button
@@ -325,7 +325,7 @@ export function DroneMap({
                   }`}
                   onClick={() => setSelectedOverlayFloorId(floor.id)}
                 >
-                  {floor.label} <span className="text-[10px] text-slate-500">{floor.code}</span>
+                  {floor.label}
                 </button>
               ))
             ) : (
