@@ -14,41 +14,52 @@ export function useMapContext() {
   return useContext(MapContext)
 }
 
-const editorStyle: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: 'raster',
-      tiles: [
-        '/api/tiles/osm/{z}/{x}/{y}.png?scale=1',
-      ],
-      tileSize: 256,
-      maxzoom: 19,
-      attribution: '&copy; OpenStreetMap contributors',
-    },
-  },
-  layers: [
-    {
-      id: 'editor-background',
-      type: 'background',
-      paint: { 'background-color': '#e5e7eb' },
-    },
-    {
-      id: 'editor-osm-basemap',
-      type: 'raster',
-      source: 'osm',
-      paint: {
-        'raster-opacity': 0.28,
-        'raster-saturation': -0.75,
-        'raster-brightness-min': 0.18,
-        'raster-brightness-max': 0.95,
+const googleRasterMaxZoom = 21
+
+function googleRasterTileScale() {
+  return window.devicePixelRatio >= 1.25 ? 2 : 1
+}
+
+function createEditorStyle(): maplibregl.StyleSpecification {
+  const tileScale = googleRasterTileScale()
+
+  return {
+    version: 8,
+    sources: {
+      googleHybrid: {
+        type: 'raster',
+        tiles: [
+          `/api/tiles/google/hybrid/{z}/{x}/{y}.png?scale=${tileScale}`,
+        ],
+        tileSize: 256,
+        maxzoom: googleRasterMaxZoom,
+        attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
       },
     },
-  ],
+    layers: [
+      {
+        id: 'editor-background',
+        type: 'background',
+        paint: { 'background-color': '#e5e7eb' },
+      },
+      {
+        id: 'editor-google-hybrid-basemap',
+        type: 'raster',
+        source: 'googleHybrid',
+        paint: {
+          'raster-opacity': 0.42,
+          'raster-saturation': -0.2,
+          'raster-brightness-min': 0.12,
+          'raster-brightness-max': 0.95,
+          'raster-resampling': 'linear',
+        },
+      },
+    ],
+  }
 }
 
 const spatialEditorMinZoom = 10
-const spatialEditorMaxZoom = 19
+const spatialEditorMaxZoom = googleRasterMaxZoom
 
 interface MapContextValue {
   map: Map | null
@@ -95,7 +106,7 @@ export function MapProvider({ children }: MapProviderProps) {
     if (node && !mapInstanceRef.current) {
       const map = new maplibregl.Map({
         container: node,
-        style: editorStyle,
+        style: createEditorStyle(),
         center: [106.70098, 10.77689],
         zoom: 14,
         minZoom: spatialEditorMinZoom,

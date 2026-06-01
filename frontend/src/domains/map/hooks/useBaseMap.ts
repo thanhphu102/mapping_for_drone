@@ -19,6 +19,7 @@ export const VIETNAM_OVERVIEW_BOUNDS: [[number, number], [number, number]] = [
 ]
 export const VIETNAM_DEFAULT_ZOOM = 4.85
 export const VIETNAM_FOCUS_ZOOM = 5.1
+const GOOGLE_RASTER_MAX_ZOOM = 21
 
 interface InitialMainMapCamera {
   camera: StoredMainMapCamera
@@ -77,19 +78,24 @@ function initialMainMapCamera(): InitialMainMapCamera {
   }
 }
 
-function createRasterOsmStyle(useRetinaTiles: boolean): StyleSpecification {
-  const tileScale = useRetinaTiles ? 2 : 1
+function googleRasterTileScale() {
+  return window.devicePixelRatio >= 1.25 ? 2 : 1
+}
+
+function createRasterGoogleHybridStyle(): StyleSpecification {
+  const tileScale = googleRasterTileScale()
+
   return {
     version: 8,
     sources: {
-      osm: {
+      googleHybrid: {
         type: 'raster',
         tiles: [
-          `/api/tiles/osm/{z}/{x}/{y}.png?scale=${tileScale}`,
+          `/api/tiles/google/hybrid/{z}/{x}/{y}.png?scale=${tileScale}`,
         ],
-        tileSize: useRetinaTiles ? 512 : 256,
-        maxzoom: 19,
-        attribution: '&copy; OpenStreetMap contributors',
+        tileSize: 256,
+        maxzoom: GOOGLE_RASTER_MAX_ZOOM,
+        attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
       },
     },
     layers: [
@@ -99,9 +105,9 @@ function createRasterOsmStyle(useRetinaTiles: boolean): StyleSpecification {
         paint: { 'background-color': '#f8fafc' },
       },
       {
-        id: 'osm',
+        id: 'google-hybrid',
         type: 'raster',
-        source: 'osm',
+        source: 'googleHybrid',
         paint: {
           'raster-fade-duration': 0,
           'raster-resampling': 'linear',
@@ -134,13 +140,12 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
     }
 
     const initialCamera = initialMainMapCamera()
-    const useRetinaTiles = window.devicePixelRatio >= 1.25
     const mapInstance = new maplibregl.Map({
       container: containerRef.current,
-      style: createRasterOsmStyle(useRetinaTiles),
+      style: createRasterGoogleHybridStyle(),
       center: initialCamera.camera.center,
       zoom: initialCamera.camera.zoom,
-      maxZoom: 19,
+      maxZoom: GOOGLE_RASTER_MAX_ZOOM,
       renderWorldCopies: false,
       bearing: initialCamera.camera.bearing,
       pitch: initialCamera.camera.pitch,
@@ -239,7 +244,7 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
 
     const handleError = (event: unknown) => {
       const maybeError = event as { error?: unknown; sourceId?: string }
-      if (maybeError.sourceId === 'osm') {
+      if (maybeError.sourceId === 'googleHybrid') {
         return
       }
       // MapLibre can emit recoverable source/tile runtime errors.
