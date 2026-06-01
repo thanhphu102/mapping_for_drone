@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { MultiPolygon } from 'geojson'
 import type { CommandTarget } from '../../drone/types'
 import {
@@ -207,10 +207,13 @@ export function useOsmSelectionFlow() {
   const [locationSelectionMessage, setLocationSelectionMessage] =
     useState<string | null>(null)
   const [fetchedTargetCoordinate, setFetchedTargetCoordinate] = useState<TargetCoordinate | null>(null)
+  const [lastFetchedCoordinate, setLastFetchedCoordinate] = useState<TargetCoordinate | null>(null)
   const [isOpeningEditor, setIsOpeningEditor] = useState(false)
   const [editorModeOverride, setEditorModeOverride] = useState<EditorMode | null>(null)
   const [confirmedLargeArea, setConfirmedLargeArea] = useState(false)
   const [isSavingCalibration, setIsSavingCalibration] = useState(false)
+  const fetchCandidatesAbortRef = useRef<AbortController | null>(null)
+  const fetchCandidatesRequestIdRef = useRef(0)
 
   const resetCalibration = useCallback(() => {
     setRawSelectedGeometry(null)
@@ -226,6 +229,7 @@ export function useOsmSelectionFlow() {
   }, [])
 
   const resetLocationPanel = useCallback(() => {
+    fetchCandidatesAbortRef.current?.abort()
     setLocationFetch(initialLocationFetchState)
     setSidebarMode('droneControl')
     setLocationSelectionMessage(null)
@@ -256,10 +260,10 @@ export function useOsmSelectionFlow() {
     resetCalibration()
 
     if (
-      fetchedTargetCoordinate
+      lastFetchedCoordinate
       && (
-        Math.abs(fetchedTargetCoordinate.lat - nextTargetCoordinate.lat) > 1e-9
-        || Math.abs(fetchedTargetCoordinate.lon - nextTargetCoordinate.lon) > 1e-9
+        Math.abs(lastFetchedCoordinate.lat - nextTargetCoordinate.lat) > 1e-9
+        || Math.abs(lastFetchedCoordinate.lon - nextTargetCoordinate.lon) > 1e-9
       )
     ) {
       const coordinateCalibration = deriveCityCalibrationFromCoordinate(nextTargetCoordinate)
@@ -296,6 +300,7 @@ export function useOsmSelectionFlow() {
           text: `Different coordinate detected. OSM fetch skipped; using coordinate ${nextTargetCoordinate.lat.toFixed(6)}, ${nextTargetCoordinate.lon.toFixed(6)}.`,
         },
       }))
+      setLastFetchedCoordinate(nextTargetCoordinate)
       return
     }
     setLocationFetch((current) => ({
@@ -310,12 +315,21 @@ export function useOsmSelectionFlow() {
         text: 'Fetching enclosing OSM elements...',
       },
     }))
+    fetchCandidatesRequestIdRef.current += 1
+    const requestId = fetchCandidatesRequestIdRef.current
+    fetchCandidatesAbortRef.current?.abort()
+    const controller = new AbortController()
+    fetchCandidatesAbortRef.current = controller
 
     try {
       const candidates = await fetchEnclosingOsmElements(
         selectedTarget.lat,
         selectedTarget.lon,
+        { signal: controller.signal },
       )
+      if (requestId !== fetchCandidatesRequestIdRef.current) {
+        return
+      }
 
       if (candidates.length === 0) {
         setLocationFetch((current) => ({
@@ -338,6 +352,7 @@ export function useOsmSelectionFlow() {
           text: 'Enclosing elements loaded.',
         },
       }))
+      setLastFetchedCoordinate(nextTargetCoordinate)
       const derivedFromCandidates = deriveCityCalibrationFromCandidates(candidates)
       const derivedFromCoordinate = deriveCityCalibrationFromCoordinate({
         lat: selectedTarget.lat,
@@ -366,6 +381,12 @@ export function useOsmSelectionFlow() {
         }
       }
     } catch (error) {
+      if (
+        error instanceof Error
+        && (error.name === 'AbortError' || requestId !== fetchCandidatesRequestIdRef.current)
+      ) {
+        return
+      }
       const message =
         error instanceof Error
           ? error.message
@@ -379,8 +400,12 @@ export function useOsmSelectionFlow() {
           text: message,
         },
       }))
+    } finally {
+      if (requestId === fetchCandidatesRequestIdRef.current) {
+        fetchCandidatesAbortRef.current = null
+      }
     }
-  }, [fetchedTargetCoordinate, resetCalibration])
+  }, [lastFetchedCoordinate, resetCalibration])
 
   const handleCandidateHover = useCallback((candidate: OsmCandidate | null) => {
     setLocationFetch((current) => ({

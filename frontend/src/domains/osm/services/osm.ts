@@ -18,6 +18,15 @@ interface OverpassResponse {
   elements?: OverpassElement[]
 }
 
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
+] as const
+const OVERPASS_TIMEOUT_MS = 12000
+const OVERPASS_CACHE_TTL_MS = 90_000
+const enclosingCache = new Map<string, { at: number; data: OsmCandidate[] }>()
+
 const categoryTagPriority = [
   'amenity',
   'shop',
@@ -145,7 +154,16 @@ function asCandidateType(value: string | undefined): OsmElementType | null {
 export async function fetchEnclosingOsmElements(
   lat: number,
   lon: number,
+  options?: {
+    signal?: AbortSignal
+  },
 ): Promise<OsmCandidate[]> {
+  const cacheKey = `${lat.toFixed(6)}:${lon.toFixed(6)}`
+  const cached = enclosingCache.get(cacheKey)
+  if (cached && (Date.now() - cached.at) <= OVERPASS_CACHE_TTL_MS) {
+    return cached.data
+  }
+
   const overpassQuery = `
 [out:json][timeout:10];
 is_in(${lat},${lon})->.areas;
@@ -156,19 +174,47 @@ is_in(${lat},${lon})->.areas;
 out tags geom;
 `
   const overpassBody = new URLSearchParams({ data: overpassQuery }).toString()
-  const response = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-    },
-    body: overpassBody,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Overpass API failed with HTTP ${response.status}`)
+  const executeOverpassFetch = async (endpoint: string): Promise<OverpassResponse> => {
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS)
+    const abortFromCaller = () => controller.abort()
+    try {
+      options?.signal?.addEventListener('abort', abortFromCaller)
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        },
+        body: overpassBody,
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        throw new Error(`Overpass API failed (${endpoint}) with HTTP ${response.status}`)
+      }
+      return (await response.json()) as OverpassResponse
+    } finally {
+      window.clearTimeout(timeoutId)
+      options?.signal?.removeEventListener('abort', abortFromCaller)
+    }
   }
 
-  const data = (await response.json()) as OverpassResponse
+  let data: OverpassResponse | null = null
+  let lastError: Error | null = null
+  const settled = await Promise.allSettled(
+    OVERPASS_ENDPOINTS.map((endpoint) => executeOverpassFetch(endpoint)),
+  )
+  for (const result of settled) {
+    if (result.status === 'fulfilled') {
+      data = result.value
+      lastError = null
+      break
+    }
+    lastError = result.reason instanceof Error ? result.reason : new Error('Overpass request failed')
+  }
+  if (!data) {
+    throw (lastError ?? new Error('Overpass API request failed'))
+  }
+
   const elements = data.elements ?? []
   const candidates: OsmCandidate[] = []
   const seen = new Set<string>()
@@ -201,6 +247,7 @@ out tags geom;
     })
   }
 
+  enclosingCache.set(cacheKey, { at: Date.now(), data: candidates })
   return candidates
 }
 

@@ -313,7 +313,7 @@ export function AppShell({
             selectedTrackingDroneId={selectedTrackingDroneId}
             onTrackingStateChange={onTrackingStateChange}
             onTrackingControllerReady={onTrackingControllerReady}
-            disableTargetSelect={sidebarMode === 'osmEnclosing' || calibrationDragEnabled}
+            disableTargetSelect={calibrationDragEnabled}
             hideTargetPopover={sidebarMode === 'osmEnclosing'}
           />
           <button
