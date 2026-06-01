@@ -20,6 +20,7 @@ import type {
   OsmCandidate,
   OsmElementGeometryResponse,
 } from '../domains/osm/types'
+import type { Geometry } from 'geojson'
 import type { EditorMode } from '../domains/spatial-editor/types'
 import type { SaveTrackedRouteResponse } from '../domains/tracking/types'
 
@@ -40,6 +41,22 @@ interface AppShellProps {
   editorModeOverride: EditorMode | null
   isOpeningEditor: boolean
   confirmedLargeArea: boolean
+  selectedBoundaryGeometry: Geometry | null
+  calibration: {
+    cityKey: string | null
+    cityLabel: string | null
+    offsetLon: number
+    offsetLat: number
+    rotationDeg: number
+    isDirty: boolean
+  }
+  previewCalibration: {
+    offsetLon: number
+    offsetLat: number
+    rotationDeg: number
+  } | null
+  calibrationDragEnabled: boolean
+  isSavingCalibration: boolean
   selectedTrackingDroneId: string | null
   trackingState: TrackingFlowState
   notice: NoticeState | null
@@ -60,6 +77,12 @@ interface AppShellProps {
   onHoverCandidate: (candidate: OsmCandidate | null) => void
   onSelectCandidate: (candidate: OsmCandidate) => void
   onChangeEditorMode: (mode: EditorMode | null) => void
+  onCalibrationOffsetChange: (field: 'offsetLon' | 'offsetLat' | 'rotationDeg', value: number) => void
+  onCalibrationNudge: (deltaLon: number, deltaLat: number) => void
+  onCalibrationRotateNudge: (deltaDeg: number) => void
+  onResetCalibration: () => void
+  onSaveCalibrationForCity: () => void
+  onToggleCalibrationDrag: () => void
   onOpenSpatialEditor: () => void
   onCloseOsmPanel: () => void
   onSelectTrackingDrone: (droneId: string) => void
@@ -103,6 +126,11 @@ export function AppShell({
   editorModeOverride,
   isOpeningEditor,
   confirmedLargeArea,
+  selectedBoundaryGeometry,
+  calibration,
+  previewCalibration,
+  calibrationDragEnabled,
+  isSavingCalibration,
   selectedTrackingDroneId,
   trackingState,
   notice,
@@ -116,6 +144,12 @@ export function AppShell({
   onHoverCandidate,
   onSelectCandidate,
   onChangeEditorMode,
+  onCalibrationOffsetChange,
+  onCalibrationNudge,
+  onCalibrationRotateNudge,
+  onResetCalibration,
+  onSaveCalibrationForCity,
+  onToggleCalibrationDrag,
   onOpenSpatialEditor,
   onCloseOsmPanel,
   onSelectTrackingDrone,
@@ -142,9 +176,16 @@ export function AppShell({
       status={locationFetch.message}
       isOpeningEditor={isOpeningEditor}
       confirmedLargeArea={confirmedLargeArea}
+      calibration={calibration}
+      calibrationDragEnabled={calibrationDragEnabled}
+      isSavingCalibration={isSavingCalibration}
       onHoverCandidate={onHoverCandidate}
       onSelectCandidate={onSelectCandidate}
       onChangeEditorMode={onChangeEditorMode}
+      onCalibrationOffsetChange={onCalibrationOffsetChange}
+      onResetCalibration={onResetCalibration}
+      onSaveCalibrationForCity={onSaveCalibrationForCity}
+      onToggleCalibrationDrag={onToggleCalibrationDrag}
       onOpenSpatialEditor={onOpenSpatialEditor}
       onClose={onCloseOsmPanel}
     />
@@ -256,7 +297,11 @@ export function AppShell({
             connectedCount={connectedCount}
             commandStatus={commandStatus}
             highlightedCandidate={locationFetch.highlightedCandidate}
-            selectedBoundaryGeometry={locationFetch.selectedGeometry?.geometry ?? null}
+            selectedBoundaryGeometry={selectedBoundaryGeometry}
+            calibrationDragEnabled={calibrationDragEnabled}
+            onCalibrationDragDelta={onCalibrationNudge}
+            onCalibrationRotateDelta={onCalibrationRotateNudge}
+            previewCalibration={previewCalibration}
             isFetchingCandidates={locationFetch.status === 'loading_candidates'}
             isFetchingFull={locationFetch.status === 'loading_full'}
             locationFetchMessage={locationFetch.message}
@@ -268,6 +313,8 @@ export function AppShell({
             selectedTrackingDroneId={selectedTrackingDroneId}
             onTrackingStateChange={onTrackingStateChange}
             onTrackingControllerReady={onTrackingControllerReady}
+            disableTargetSelect={sidebarMode === 'osmEnclosing' || calibrationDragEnabled}
+            hideTargetPopover={sidebarMode === 'osmEnclosing'}
           />
           <button
             type="button"

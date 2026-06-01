@@ -42,6 +42,14 @@ interface DroneMapProps {
   commandStatus: CommandDispatchStatus
   highlightedCandidate: OsmCandidate | null
   selectedBoundaryGeometry: Geometry | null
+  calibrationDragEnabled?: boolean
+  onCalibrationDragDelta?: (deltaLon: number, deltaLat: number) => void
+  onCalibrationRotateDelta?: (deltaDeg: number) => void
+  previewCalibration?: {
+    offsetLon: number
+    offsetLat: number
+    rotationDeg: number
+  } | null
   isFetchingCandidates: boolean
   isFetchingFull: boolean
   locationFetchMessage: { tone: 'success' | 'error' | 'info'; text: string } | null
@@ -65,6 +73,8 @@ interface DroneMapProps {
     clearTracking: () => void
     saveTrackingRoute: () => Promise<SaveTrackedRouteResponse>
   } | null) => void
+  disableTargetSelect?: boolean
+  hideTargetPopover?: boolean
 }
 
 export function DroneMap({
@@ -75,6 +85,10 @@ export function DroneMap({
   commandStatus,
   highlightedCandidate,
   selectedBoundaryGeometry,
+  calibrationDragEnabled = false,
+  onCalibrationDragDelta,
+  onCalibrationRotateDelta,
+  previewCalibration = null,
   isFetchingCandidates,
   isFetchingFull,
   locationFetchMessage,
@@ -86,10 +100,15 @@ export function DroneMap({
   selectedTrackingDroneId,
   onTrackingStateChange,
   onTrackingControllerReady,
+  disableTargetSelect = false,
+  hideTargetPopover = false,
 }: DroneMapProps) {
   const isTrackingRef = useRef(false)
   const stopTrackingRef = useRef<() => void>(() => {})
   const handleMapTargetSelect = useCallback((target: MapTargetDraft) => {
+    if (disableTargetSelect) {
+      return
+    }
     if (isTrackingRef.current) {
       stopTrackingRef.current()
       onTrackingNotice({
@@ -100,7 +119,7 @@ export function DroneMap({
       return
     }
     onTargetSelect(target)
-  }, [onTargetSelect, onTrackingNotice])
+  }, [disableTargetSelect, onTargetSelect, onTrackingNotice])
   const {
     containerRef,
     map,
@@ -229,6 +248,10 @@ export function DroneMap({
     map,
     highlightedCandidate,
     selectedBoundaryGeometry,
+    calibrationDragEnabled,
+    onCalibrationDragDelta,
+    onCalibrationRotateDelta,
+    previewCalibration,
   })
 
   useEffect(() => {
@@ -334,7 +357,7 @@ export function DroneMap({
           </div>
         </div>
       ) : null}
-      {selectedTarget && tracking.status !== 'tracking' ? (
+      {selectedTarget && tracking.status !== 'tracking' && !hideTargetPopover ? (
         <TargetCommandPopover
           target={selectedTarget}
           point={targetPoint}
