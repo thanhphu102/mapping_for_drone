@@ -72,24 +72,24 @@ export function EditorStructurePanel({
   })
 
   return (
-    <aside className="flex h-full w-full flex-col border-r border-slate-200 bg-white text-slate-900">
-      <header className="border-b border-slate-200 px-4 py-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
+    <aside className="flex h-full w-full flex-col bg-white text-slate-900">
+      <header className="border-b border-slate-200 px-5 py-4">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
           <Building2 className="size-4 text-sky-600" aria-hidden="true" />
           Project
         </div>
-        <h2 className="mt-1 truncate text-base font-semibold text-slate-900">{project?.name ?? 'Loading project...'}</h2>
+        <h2 className="mt-2 truncate text-lg font-semibold text-slate-950">{project?.name ?? 'Loading project...'}</h2>
       </header>
 
-      <section className="border-b border-slate-200 px-4 py-3">
-        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <section className="border-b border-slate-200 px-5 py-4">
+        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
           <Layers3 className="size-3.5" />
           Floors
         </div>
         <div className="space-y-1">
           <button
             type="button"
-            className="mb-1 w-full rounded-md border border-sky-300 bg-sky-100 px-2 py-1.5 text-left text-xs font-semibold text-sky-900 shadow-sm transition hover:border-sky-400 hover:bg-sky-200 disabled:opacity-50"
+            className="mb-2 w-full rounded-lg border border-sky-500 bg-sky-500 px-3 py-2 text-left text-sm font-semibold text-white transition hover:bg-sky-600 disabled:opacity-50"
             onClick={onCreateFloor}
             disabled={isCreatingFloor}
           >
@@ -104,8 +104,8 @@ export function EditorStructurePanel({
               return (
                 <div
                   key={floor.id}
-                  className={`rounded-md border px-2 py-1.5 text-sm ${
-                    isActive ? 'border-sky-300 bg-sky-50 shadow-sm' : 'border-slate-200 bg-white'
+                  className={`rounded-xl border px-3 py-2.5 text-sm transition ${
+                    isActive ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-white'
                   }`}
                   role="button"
                   tabIndex={0}
@@ -126,17 +126,17 @@ export function EditorStructurePanel({
                       <input
                         value={editLabel}
                         onChange={(event) => setEditLabel(event.target.value)}
-                        className="w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900"
                       />
                       <input
                         value={editCode}
                         onChange={(event) => setEditCode(event.target.value)}
-                        className="w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900"
                       />
                       <div className="flex gap-1">
                         <button
                           type="button"
-                          className="rounded border border-sky-300 bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-900 shadow-sm transition hover:border-sky-400 hover:bg-sky-200"
+                          className="rounded-lg border border-sky-500 bg-sky-500 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-sky-600"
                           disabled={isUpdatingFloor}
                           onClick={() => {
                             onUpdateFloor(floor, { label: editLabel.trim(), code: editCode.trim() })
@@ -147,7 +147,7 @@ export function EditorStructurePanel({
                         </button>
                         <button
                           type="button"
-                          className="rounded border border-slate-700 px-2 py-0.5 text-xs text-slate-300"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500"
                           onClick={() => setEditingFloorId(null)}
                         >
                           Cancel
@@ -159,17 +159,20 @@ export function EditorStructurePanel({
                       <button
                         type="button"
                         className={`flex w-full items-center justify-between text-left transition ${
-                          isActive ? 'text-slate-950' : 'text-slate-700 hover:text-slate-950'
+                          isActive ? 'text-slate-950' : 'text-slate-700'
                         }`}
-                        onClick={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onSelectFloor(floor.id)
+                        }}
                       >
                         <span className="font-semibold">{floor.label}</span>
                         <span className={`${isActive ? 'text-sky-700' : 'text-slate-500'} text-xs font-medium`}>{floor.code}</span>
                       </button>
-                      <div className="mt-1 flex gap-1">
+                      <div className="mt-2 flex gap-2">
                         <button
                           type="button"
-                          className="rounded border border-slate-300 bg-white px-2 py-0.5 text-xs font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950"
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-950"
                           onClick={(event) => {
                             event.stopPropagation()
                             setEditingFloorId(floor.id)
@@ -181,7 +184,7 @@ export function EditorStructurePanel({
                         </button>
                         <button
                           type="button"
-                          className="rounded border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 shadow-sm transition hover:border-rose-400 hover:bg-rose-100"
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100"
                           disabled={isUpdatingFloor}
                           onClick={(event) => {
                             event.stopPropagation()
@@ -200,8 +203,8 @@ export function EditorStructurePanel({
         </div>
       </section>
 
-      <details className="border-b border-slate-200 px-4 py-3">
-        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <details className="border-b border-slate-200 px-5 py-4">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
           Import
         </summary>
         <div className="mt-3">
@@ -217,18 +220,18 @@ export function EditorStructurePanel({
         </div>
       </details>
 
-      <section className="min-h-0 flex-1 p-4">
-        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Objects</div>
+      <section className="min-h-0 flex-1 p-5">
+        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Objects</div>
         <div className="relative mb-2">
           <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-slate-400" />
           <input
             value={tagFilter}
             onChange={(event) => onTagFilterChange(event.target.value)}
             placeholder="Filter by tag or name"
-            className="w-full rounded-md border border-slate-200 bg-white py-2 pl-8 pr-2 text-sm text-slate-900 outline-none ring-sky-400 focus:ring"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 outline-none ring-sky-400 focus:ring"
           />
         </div>
-        <div className="h-full space-y-1 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2">
+        <div className="h-full space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
           {filteredFeatures.length === 0 ? (
             <div className="px-2 py-3 text-xs text-slate-500">No objects in this view</div>
           ) : (
@@ -240,10 +243,10 @@ export function EditorStructurePanel({
                 <button
                   key={id}
                   type="button"
-                  className={`w-full rounded-md border px-2 py-1.5 text-left transition ${
+                  className={`w-full rounded-lg border px-3 py-2.5 text-left transition ${
                     isSelected
-                      ? 'border-sky-300 bg-sky-50 text-slate-950 shadow-sm'
-                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950'
+                      ? 'border-sky-300 bg-sky-50 text-slate-950'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-950'
                   }`}
                   onClick={() => onSelectFeatureIds([id])}
                 >

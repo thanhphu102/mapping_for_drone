@@ -247,7 +247,7 @@ export function AppShell({
 
   return (
     <div className="min-h-screen h-dvh bg-slate-100 text-slate-950">
-      <div className="flex h-full flex-col">
+      <div className="flex h-full flex-col lg:flex-row">
         <main className="relative min-h-0 flex-1">
           <DroneMap
             dronesById={dronesById}
@@ -277,26 +277,25 @@ export function AppShell({
             <PanelRightOpen className="size-3.5" />
             Panel
           </button>
-          <aside className="absolute inset-y-0 right-0 z-30 hidden w-[424px] overflow-visible lg:block">
-            <div
-              className={`absolute inset-y-0 right-0 flex w-[424px] transform-gpu items-center justify-end will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                isDesktopCollapsed ? 'translate-x-[400px]' : 'translate-x-0'
-              }`}
-            >
-              <button
-                type="button"
-                className="mr-[-1px] flex h-14 w-6 items-center justify-center rounded-l-full border border-slate-200/80 border-r-0 bg-white/96 text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
-                onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-                aria-label={isDesktopCollapsed ? 'Open panel' : 'Collapse panel'}
-              >
-                {isDesktopCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-              </button>
-              <div className="h-full w-[400px] overflow-hidden border-l border-slate-200 bg-slate-50 shadow-[0_12px_40px_rgba(15,23,42,0.14)]">
-                {sidebarContent}
-              </div>
-            </div>
-          </aside>
         </main>
+
+        <aside
+          className={`relative hidden border-l border-slate-200 bg-slate-50 transition-[width] duration-200 ease-out lg:block ${
+            isDesktopCollapsed ? 'w-[22px]' : 'w-[380px] xl:w-[400px]'
+          }`}
+        >
+          <button
+            type="button"
+            className="absolute left-0 top-1/2 z-20 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
+            onClick={() => setDesktopSidebarCollapsed((current) => !current)}
+            aria-label={isDesktopCollapsed ? 'Open panel' : 'Collapse panel'}
+          >
+            {isDesktopCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          </button>
+          {isDesktopCollapsed ? null : (
+            <div className="h-full overflow-hidden">{sidebarContent}</div>
+          )}
+        </aside>
       </div>
 
       {isMobileDrawerOpen ? (

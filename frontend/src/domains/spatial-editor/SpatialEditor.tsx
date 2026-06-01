@@ -286,18 +286,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const toolsEnabled = mapReady
 
   const featureIdForState = useCallback((feature: Feature) => String(feature.id ?? feature.properties?.id ?? ''), [])
-
-  const visibleFeatures = useMemo(() => {
-    const deleted = new Set(pendingDeletedFeatureIds)
-    const updated = pendingUpdatedFeatures
-    const merged = serverFeatures
-      .filter((feature) => {
-        const id = featureIdForState(feature)
-        return !deleted.has(id)
-      })
-      .map((feature) => updated[featureIdForState(feature)] ?? feature)
-    return [...merged, ...pendingCreatedFeatures]
-  }, [featureIdForState, pendingCreatedFeatures, pendingDeletedFeatureIds, pendingUpdatedFeatures, serverFeatures])
+  const featureFloorIdForState = useCallback((feature: Feature) => {
+    const spatialFeature = feature as SpatialFeature
+    return spatialFeature.floorId
+      ?? (feature.properties as Record<string, unknown> | undefined)?.floorId
+      ?? null
+  }, [])
 
   const draftCollection = currentDraftCollection
   const localDraftFeatureIds = useMemo(
@@ -333,6 +327,37 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const floorRequired = project?.editorMode === 'building' || project?.editorMode === 'indoor'
   const canShowFloorSelector = Boolean(floorRequired || hasFloors)
   const canDrawOnFloor = !floorRequired || Boolean(selectedFloorId)
+
+  const visibleFeatures = useMemo(() => {
+    const deleted = new Set(pendingDeletedFeatureIds)
+    const updated = pendingUpdatedFeatures
+    const merged = serverFeatures
+      .filter((feature) => {
+        const id = featureIdForState(feature)
+        return !deleted.has(id)
+      })
+      .map((feature) => updated[featureIdForState(feature)] ?? feature)
+    const combined = [...merged, ...pendingCreatedFeatures]
+    if (hasFloors) {
+      if (!selectedFloorId) {
+        return []
+      }
+      return combined.filter((feature) => featureFloorIdForState(feature) === selectedFloorId)
+    }
+    if (!selectedFloorId) {
+      return combined
+    }
+    return combined.filter((feature) => featureFloorIdForState(feature) === selectedFloorId)
+  }, [
+    featureFloorIdForState,
+    featureIdForState,
+    hasFloors,
+    pendingCreatedFeatures,
+    pendingDeletedFeatureIds,
+    pendingUpdatedFeatures,
+    selectedFloorId,
+    serverFeatures,
+  ])
 
   // --- Sync refs ---
   useEffect(() => {
@@ -1495,10 +1520,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           className="absolute inset-0 h-full w-full"
           aria-label="Spatial editor map"
         />
-        <div className="absolute left-4 top-4 z-30 flex items-center gap-2">
+        <div className="absolute left-4 top-4 z-30 flex items-center gap-2 lg:hidden">
           <button
             type="button"
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-sm font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
             onClick={handleBackToMainMap}
             aria-label="Back to main map"
           >
@@ -1569,6 +1594,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           onClearDraft={() => setDraftPoints([])}
           onSaveDraft={handleSaveDraft}
           onPublish={handlePublish}
+          onBack={handleBackToMainMap}
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           zoomLabel={`${Math.round(mapZoom * 10) / 10}x`}
@@ -1613,7 +1639,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           />
         ) : null}
         {breadcrumb && breadcrumb.length > 1 ? (
-          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 px-3 py-1.5 text-sm shadow-lg backdrop-blur">
+          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm">
             <button
               type="button"
               className="text-sky-600 hover:text-sky-800 hover:underline"
@@ -1631,7 +1657,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               leftSidebarCollapsed ? '-translate-x-[300px]' : 'translate-x-0'
             }`}
           >
-            <div className="h-full w-[300px] overflow-hidden border-r border-slate-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.14)]">
+            <div className="h-full w-[300px] overflow-hidden rounded-r-2xl border-r border-slate-200 bg-white shadow-lg">
               <EditorStructurePanel
                 project={project}
                 floors={floors}
@@ -1657,7 +1683,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             </div>
             <button
               type="button"
-              className="ml-[-1px] flex h-14 w-6 items-center justify-center rounded-r-full border border-slate-200/80 border-l-0 bg-white/96 text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
+              className="ml-[-1px] flex h-14 w-6 items-center justify-center rounded-r-full border border-slate-200 border-l-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
               onClick={() => setLeftSidebarCollapsed((current) => !current)}
               aria-label={leftSidebarCollapsed ? 'Open project panel' : 'Collapse project panel'}
             >
@@ -1673,13 +1699,13 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           >
             <button
               type="button"
-              className="mr-[-1px] flex h-14 w-6 items-center justify-center rounded-l-full border border-slate-200/80 border-r-0 bg-white/96 text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
+              className="mr-[-1px] flex h-14 w-6 items-center justify-center rounded-l-full border border-slate-200 border-r-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
               onClick={() => setRightSidebarCollapsed((current) => !current)}
               aria-label={rightSidebarCollapsed ? 'Open inspector panel' : 'Collapse inspector panel'}
             >
               {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
             </button>
-            <div className="h-full w-[320px] overflow-hidden border-l border-slate-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.14)]">
+            <div className="h-full w-[320px] overflow-hidden rounded-l-2xl border-l border-slate-200 bg-white shadow-lg">
               <EditorSidebar
                 project={project}
                 projectConfig={projectConfig}

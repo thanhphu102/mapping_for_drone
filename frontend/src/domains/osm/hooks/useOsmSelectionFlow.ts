@@ -8,6 +8,7 @@ import {
 import type { EditorMode } from '../../spatial-editor/types'
 import { fetchEnclosingOsmElements } from '../services/osm'
 import type { OsmCandidate, OsmElementGeometryResponse } from '../types'
+import { openSpatialEditorRoute } from '../../../app/routes'
 
 type LocationFetchStatus =
   | 'idle'
@@ -221,7 +222,7 @@ export function useOsmSelectionFlow() {
       })
       if (existingProjects.length > 0) {
         const existing = existingProjects[0]
-        window.location.assign(`/spatial-editor/${existing.id}`)
+        openSpatialEditorRoute(existing.id)
         return
       }
 
@@ -240,7 +241,7 @@ export function useOsmSelectionFlow() {
           confirmedLargeArea,
         },
       )
-      window.location.assign(`/spatial-editor/${response.projectId}`)
+      openSpatialEditorRoute(response.projectId)
     } catch (error) {
       const requiresConfirmation =
         typeof error === 'object' &&
