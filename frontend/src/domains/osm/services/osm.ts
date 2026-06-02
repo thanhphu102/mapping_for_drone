@@ -164,55 +164,31 @@ export async function fetchEnclosingOsmElements(
     return cached.data
   }
 
-  const overpassQuery = `
-[out:json][timeout:10];
-is_in(${lat},${lon})->.areas;
-(
-  way(pivot.areas);
-  relation(pivot.areas);
-);
-out tags geom;
-`
-  const overpassBody = new URLSearchParams({ data: overpassQuery }).toString()
-  const executeOverpassFetch = async (endpoint: string): Promise<OverpassResponse> => {
-    const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS)
-    const abortFromCaller = () => controller.abort()
-    try {
-      options?.signal?.addEventListener('abort', abortFromCaller)
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        },
-        body: overpassBody,
+  void OVERPASS_ENDPOINTS
+  void OVERPASS_TIMEOUT_MS
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS)
+  const abortFromCaller = () => controller.abort()
+  options?.signal?.addEventListener('abort', abortFromCaller)
+  let data: OverpassResponse | null = null
+  try {
+    const response = await fetch(
+      `/api/osm/enclosing?lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lon))}`,
+      {
         signal: controller.signal,
-      })
-      if (!response.ok) {
-        throw new Error(`Overpass API failed (${endpoint}) with HTTP ${response.status}`)
-      }
-      return (await response.json()) as OverpassResponse
-    } finally {
-      window.clearTimeout(timeoutId)
-      options?.signal?.removeEventListener('abort', abortFromCaller)
+      },
+    )
+    if (!response.ok) {
+      throw new Error(`Backend OSM enclosing request failed with HTTP ${response.status}`)
     }
+    data = (await response.json()) as OverpassResponse
+  } finally {
+    window.clearTimeout(timeoutId)
+    options?.signal?.removeEventListener('abort', abortFromCaller)
   }
 
-  let data: OverpassResponse | null = null
-  let lastError: Error | null = null
-  const settled = await Promise.allSettled(
-    OVERPASS_ENDPOINTS.map((endpoint) => executeOverpassFetch(endpoint)),
-  )
-  for (const result of settled) {
-    if (result.status === 'fulfilled') {
-      data = result.value
-      lastError = null
-      break
-    }
-    lastError = result.reason instanceof Error ? result.reason : new Error('Overpass request failed')
-  }
   if (!data) {
-    throw (lastError ?? new Error('Overpass API request failed'))
+    throw new Error('Backend OSM enclosing response is empty')
   }
 
   const elements = data.elements ?? []

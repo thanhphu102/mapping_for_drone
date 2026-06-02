@@ -259,50 +259,6 @@ export function useOsmSelectionFlow() {
     setConfirmedLargeArea(false)
     resetCalibration()
 
-    if (
-      lastFetchedCoordinate
-      && (
-        Math.abs(lastFetchedCoordinate.lat - nextTargetCoordinate.lat) > 1e-9
-        || Math.abs(lastFetchedCoordinate.lon - nextTargetCoordinate.lon) > 1e-9
-      )
-    ) {
-      const coordinateCalibration = deriveCityCalibrationFromCoordinate(nextTargetCoordinate)
-      setCalibration((current) => ({
-        ...current,
-        cityKey: coordinateCalibration.cityKey,
-        cityLabel: coordinateCalibration.cityLabel,
-      }))
-      if (coordinateCalibration.cityKey) {
-        try {
-          const existing = await fetchOsmCityCalibration(coordinateCalibration.cityKey)
-          setCalibration((current) => ({
-            ...current,
-            cityKey: coordinateCalibration.cityKey,
-            cityLabel: coordinateCalibration.cityLabel,
-            offsetLon: existing?.offsetLon ?? 0,
-            offsetLat: existing?.offsetLat ?? 0,
-            rotationDeg: existing?.rotationDeg ?? 0,
-            isDirty: false,
-          }))
-        } catch {
-          // keep coordinate mode defaults
-        }
-      }
-      setLocationFetch((current) => ({
-        ...current,
-        status: 'idle',
-        candidates: [],
-        selectedCandidate: null,
-        highlightedCandidate: null,
-        selectedGeometry: null,
-        message: {
-          tone: 'info',
-          text: `Different coordinate detected. OSM fetch skipped; using coordinate ${nextTargetCoordinate.lat.toFixed(6)}, ${nextTargetCoordinate.lon.toFixed(6)}.`,
-        },
-      }))
-      setLastFetchedCoordinate(nextTargetCoordinate)
-      return
-    }
     setLocationFetch((current) => ({
       ...current,
       status: 'loading_candidates',
