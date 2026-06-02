@@ -5,6 +5,10 @@ import type { DrawingProject, ProjectCanvasConfig, SpatialFloor } from '../types
 import type { SnapPreview } from '../hooks/useSnapEngine'
 import { featureMeasurement, localCoordinates } from '../hooks/useDrawingEngine'
 import type { InspectorDraft } from '../hooks/useInspectorFormState'
+import { GoogleBaseMapPicker } from '../../map/components/GoogleBaseMapPicker'
+import type { GoogleBaseMapMode } from '../../map/baseMapModes'
+import { EditorBackdropPicker } from './EditorBackdropPicker'
+import type { EditorBackdropMode } from '../editorBackdropMode'
 
 interface EditorSidebarProps {
   project: DrawingProject | null
@@ -14,6 +18,8 @@ interface EditorSidebarProps {
   mapZoom: number
   mapReady: boolean
   boundaryRendered: boolean
+  baseMapMode: GoogleBaseMapMode
+  backdropMode: EditorBackdropMode
   visibleFeatures: Feature[]
   draftFeature: GeoJSON.FeatureCollection | null
   hoverCoordinate: Position | null
@@ -24,6 +30,8 @@ interface EditorSidebarProps {
   onInspectorNameChange: (value: string) => void
   onInspectorTagChange: (value: string) => void
   onInspectorNoteChange: (value: string) => void
+  onBaseMapModeChange: (mode: GoogleBaseMapMode) => void
+  onBackdropModeChange: (mode: EditorBackdropMode) => void
   onSaveInspector: () => void
   isSavingInspector: boolean
 }
@@ -36,6 +44,8 @@ export function EditorSidebar({
   mapZoom,
   mapReady,
   boundaryRendered,
+  baseMapMode,
+  backdropMode,
   visibleFeatures,
   draftFeature,
   hoverCoordinate,
@@ -46,6 +56,8 @@ export function EditorSidebar({
   onInspectorNameChange,
   onInspectorTagChange,
   onInspectorNoteChange,
+  onBaseMapModeChange,
+  onBackdropModeChange,
   onSaveInspector,
   isSavingInspector,
 }: EditorSidebarProps) {
@@ -58,10 +70,10 @@ export function EditorSidebar({
   }
 
   return (
-    <aside className="flex h-full w-full flex-col border-l border-slate-200 bg-white text-slate-900">
-      <header className="border-b border-slate-200 px-4 py-3">
-        <div className="text-sm font-semibold text-slate-950">Inspector</div>
-        <div className="mt-1 text-xs text-slate-500">
+    <aside className="flex h-full w-full flex-col bg-white text-slate-900">
+      <header className="border-b border-slate-200 px-5 py-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Inspector</div>
+        <div className="mt-2 text-sm text-slate-500">
           {selectedFeatures.length === 0
             ? 'Select an object to edit metadata'
             : isMultiSelect
@@ -70,15 +82,29 @@ export function EditorSidebar({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Properties</h3>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+        <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">View</h3>
+          <div className="mt-2 space-y-2">
+            <div>
+              <div className="mb-1 text-xs text-slate-500">Backdrop</div>
+              <EditorBackdropPicker mode={backdropMode} onChange={onBackdropModeChange} />
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-slate-500">Base map</div>
+              <GoogleBaseMapPicker mode={baseMapMode} onChange={onBaseMapModeChange} />
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Properties</h3>
           <div className="mt-2 space-y-2">
             <label className="block">
               <span className="mb-1 block text-xs text-slate-500">Name</span>
               <input
                 name="inspector-name"
-                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
                 value={inspectorDraft.name}
                 onChange={(event) => onInspectorNameChange(event.target.value)}
                 onKeyDown={stopEditorShortcutPropagation}
@@ -93,7 +119,7 @@ export function EditorSidebar({
               <span className="mb-1 block text-xs text-slate-500">Tag</span>
               <input
                 name="inspector-tag"
-                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
                 value={inspectorDraft.tag}
                 onChange={(event) => onInspectorTagChange(event.target.value)}
                 onKeyDown={stopEditorShortcutPropagation}
@@ -108,8 +134,8 @@ export function EditorSidebar({
               <span className="mb-1 block text-xs text-slate-500">Note</span>
               <textarea
                 name="inspector-note"
-                rows={4}
-                className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
+                rows={5}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
                 value={inspectorDraft.noteText}
                 onChange={(event) => onInspectorNoteChange(event.target.value)}
                 onKeyDown={stopEditorShortcutPropagation}
@@ -124,45 +150,38 @@ export function EditorSidebar({
               type="button"
               onClick={onSaveInspector}
               disabled={selectedFeatures.length === 0 || isSavingInspector}
-              className="inline-flex items-center gap-1 rounded-md border border-sky-300 bg-sky-100 px-2.5 py-1.5 text-sm font-semibold text-sky-900 shadow-sm transition hover:border-sky-400 hover:bg-sky-200 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg border border-sky-500 bg-sky-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-sky-600 disabled:opacity-50"
             >
-              <Save className="size-3.5" /> Save metadata
+              <Save className="size-3.5" /> Save
             </button>
           </div>
         </section>
 
-        <details className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
-            More
-          </summary>
-          <section className="mt-3 rounded-md border border-slate-200 bg-white p-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Workspace</h3>
-            <div className="mt-2 space-y-1">
-              <div>Floor: {activeFloor?.label ?? 'None'}</div>
-              <div>Zoom: {mapZoom.toFixed(1)}</div>
-              <div>Visible objects: {visibleFeatures.length}</div>
-              <div>Precision: {mapZoom >= projectConfig.precisionZoom ? 'on' : 'off'}</div>
-            </div>
-          </section>
-          <section className="mt-2 rounded-md border border-slate-200 bg-white p-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</h3>
-            <div className="mt-2 space-y-1">
-              <div>Map ready: {mapReady ? 'yes' : 'no'}</div>
-              <div>Boundary ready: {boundaryRendered ? 'yes' : 'no'}</div>
-              <div>Snap: {projectConfig.snapping.enabled ? (snapPreview ? `locked ${snapPreview.kind}` : 'enabled') : 'disabled'}</div>
-              <div className="font-mono text-xs text-slate-500">Cursor: {hoverCoordinate ? `${hoverCoordinate[1].toFixed(6)}, ${hoverCoordinate[0].toFixed(6)}` : '-'}</div>
-              <div className="font-mono text-xs text-slate-500">Local: {hoverLocal ? `X ${hoverLocal.x.toFixed(2)}m · Y ${hoverLocal.y.toFixed(2)}m` : '-'}</div>
-              <div>{featureMeasurement(draftFeature)}</div>
-            </div>
-          </section>
-        </details>
-
-        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
           <div className="flex items-start gap-2">
             <Info className="mt-0.5 size-4 text-sky-500" />
             <span>{message}</span>
           </div>
         </div>
+
+        <details className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Advanced
+          </summary>
+          <div className="mt-3 space-y-1 rounded-lg border border-slate-200 bg-white p-4">
+            <div>Project mode: {project?.editorMode ?? '-'}</div>
+            <div>Floor: {activeFloor?.label ?? 'None'}</div>
+            <div>Floors: {floors.length}</div>
+            <div>Objects in view: {visibleFeatures.length}</div>
+            <div>Zoom: {mapZoom.toFixed(1)}</div>
+            <div>Map ready: {mapReady ? 'yes' : 'no'}</div>
+            <div>Boundary ready: {boundaryRendered ? 'yes' : 'no'}</div>
+            <div>Snap: {projectConfig.snapping.enabled ? (snapPreview ? `locked ${snapPreview.kind}` : 'enabled') : 'disabled'}</div>
+            <div className="font-mono text-xs text-slate-500">Cursor: {hoverCoordinate ? `${hoverCoordinate[1].toFixed(6)}, ${hoverCoordinate[0].toFixed(6)}` : '-'}</div>
+            <div className="font-mono text-xs text-slate-500">Local: {hoverLocal ? `X ${hoverLocal.x.toFixed(2)}m · Y ${hoverLocal.y.toFixed(2)}m` : '-'}</div>
+            <div>{featureMeasurement(draftFeature)}</div>
+          </div>
+        </details>
       </div>
     </aside>
   )

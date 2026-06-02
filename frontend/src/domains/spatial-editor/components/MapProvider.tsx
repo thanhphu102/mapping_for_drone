@@ -8,53 +8,99 @@ import {
   type ReactNode,
 } from 'react'
 import maplibregl, { type Map } from 'maplibre-gl'
+import {
+  GOOGLE_HYBRID_LAYER_ID,
+  GOOGLE_HYBRID_SOURCE_ID,
+  GOOGLE_RASTER_MAX_ZOOM,
+  GOOGLE_STREETS_LAYER_ID,
+  GOOGLE_STREETS_SOURCE_ID,
+  googleRasterTileScale,
+  readStoredGoogleBaseMapMode,
+  setGoogleBaseMapLayerVisibility,
+  writeStoredGoogleBaseMapMode,
+  type GoogleBaseMapMode,
+} from '../../map/baseMapModes'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function useMapContext() {
   return useContext(MapContext)
 }
 
-const editorStyle: maplibregl.StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: 'raster',
-      tiles: [
-        '/api/tiles/osm/{z}/{x}/{y}.png?scale=1',
-      ],
-      tileSize: 256,
-      maxzoom: 19,
-      attribution: '&copy; OpenStreetMap contributors',
-    },
-  },
-  layers: [
-    {
-      id: 'editor-background',
-      type: 'background',
-      paint: { 'background-color': '#e5e7eb' },
-    },
-    {
-      id: 'editor-osm-basemap',
-      type: 'raster',
-      source: 'osm',
-      paint: {
-        'raster-opacity': 0.28,
-        'raster-saturation': -0.75,
-        'raster-brightness-min': 0.18,
-        'raster-brightness-max': 0.95,
+function createEditorStyle(mode: GoogleBaseMapMode): maplibregl.StyleSpecification {
+  const tileScale = googleRasterTileScale()
+
+  return {
+    version: 8,
+    sources: {
+      [GOOGLE_STREETS_SOURCE_ID]: {
+        type: 'raster',
+        tiles: [
+          `/api/tiles/google/streets/{z}/{x}/{y}.png?scale=${tileScale}`,
+        ],
+        tileSize: 256,
+        maxzoom: GOOGLE_RASTER_MAX_ZOOM,
+        attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
+      },
+      [GOOGLE_HYBRID_SOURCE_ID]: {
+        type: 'raster',
+        tiles: [
+          `/api/tiles/google/hybrid/{z}/{x}/{y}.png?scale=${tileScale}`,
+        ],
+        tileSize: 256,
+        maxzoom: GOOGLE_RASTER_MAX_ZOOM,
+        attribution: '&copy; <a href="https://www.google.com/maps">Google Maps</a>',
       },
     },
-  ],
+    layers: [
+      {
+        id: 'editor-background',
+        type: 'background',
+        paint: { 'background-color': '#e5e7eb' },
+      },
+      {
+        id: GOOGLE_STREETS_LAYER_ID,
+        type: 'raster',
+        source: GOOGLE_STREETS_SOURCE_ID,
+        layout: {
+          visibility: mode === 'map' ? 'visible' : 'none',
+        },
+        paint: {
+          'raster-opacity': 0.46,
+          'raster-saturation': -0.5,
+          'raster-brightness-min': 0.14,
+          'raster-brightness-max': 0.96,
+          'raster-resampling': 'linear',
+        },
+      },
+      {
+        id: GOOGLE_HYBRID_LAYER_ID,
+        type: 'raster',
+        source: GOOGLE_HYBRID_SOURCE_ID,
+        layout: {
+          visibility: mode === 'satellite' ? 'visible' : 'none',
+        },
+        paint: {
+          'raster-opacity': 0.42,
+          'raster-saturation': -0.2,
+          'raster-brightness-min': 0.12,
+          'raster-brightness-max': 0.95,
+          'raster-resampling': 'linear',
+        },
+      },
+    ],
+  }
 }
 
 const spatialEditorMinZoom = 10
-const spatialEditorMaxZoom = 19
+const spatialEditorMaxZoom = GOOGLE_RASTER_MAX_ZOOM
 
 interface MapContextValue {
   map: Map | null
   mapReady: boolean
   mapLoaded: boolean
   mapZoom: number
+  baseMapMode: GoogleBaseMapMode
+  setBaseMapMode: (mode: GoogleBaseMapMode) => void
   containerRef: (node: HTMLDivElement | null) => void
 }
 
@@ -63,6 +109,8 @@ const MapContext = createContext<MapContextValue>({
   mapReady: false,
   mapLoaded: false,
   mapZoom: 0,
+  baseMapMode: 'map',
+  setBaseMapMode: () => { },
   containerRef: () => { },
 })
 
@@ -81,6 +129,9 @@ export function MapProvider({ children }: MapProviderProps) {
   const [mapReady, setMapReady] = useState(false)
   const [mapLoaded, setMapLoaded] = useState(false)
   const [mapZoom, setMapZoom] = useState(0)
+  const [baseMapMode, setBaseMapMode] = useState<GoogleBaseMapMode>(
+    readStoredGoogleBaseMapMode,
+  )
 
   // Callback ref for the map container div
   const containerRef = useCallback((node: HTMLDivElement | null) => {
@@ -95,7 +146,7 @@ export function MapProvider({ children }: MapProviderProps) {
     if (node && !mapInstanceRef.current) {
       const map = new maplibregl.Map({
         container: node,
-        style: editorStyle,
+        style: createEditorStyle(readStoredGoogleBaseMapMode()),
         center: [106.70098, 10.77689],
         zoom: 14,
         minZoom: spatialEditorMinZoom,
@@ -174,6 +225,28 @@ export function MapProvider({ children }: MapProviderProps) {
   }, [])
 
   useEffect(() => {
+    const map = mapInstanceRef.current
+    if (!map) {
+      return
+    }
+
+    const applyBaseMapMode = () => {
+      setGoogleBaseMapLayerVisibility(map, baseMapMode)
+      writeStoredGoogleBaseMapMode(baseMapMode)
+    }
+
+    if (map.isStyleLoaded()) {
+      applyBaseMapMode()
+    } else {
+      map.once('load', applyBaseMapMode)
+    }
+
+    return () => {
+      map.off('load', applyBaseMapMode)
+    }
+  }, [baseMapMode])
+
+  useEffect(() => {
     isMountedRef.current = true
     return () => {
       isMountedRef.current = false
@@ -194,6 +267,8 @@ export function MapProvider({ children }: MapProviderProps) {
         mapReady,
         mapLoaded,
         mapZoom,
+        baseMapMode,
+        setBaseMapMode,
         containerRef,
       }}
     >

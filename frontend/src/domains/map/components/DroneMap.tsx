@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Geometry } from 'geojson'
-import { AlertTriangle, Loader2, MapPinned, Navigation } from 'lucide-react'
+import { AlertTriangle, Loader2, Navigation, Search } from 'lucide-react'
 import {
   fitVietnamOverview,
   useBaseMap,
 } from '../hooks/useBaseMap'
+import { GoogleBaseMapPicker } from './GoogleBaseMapPicker'
 import { PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM } from '../layers/overlayLayers'
 import { useOsmPreviewLayers } from '../hooks/useOsmPreviewLayers'
 import { useOverlaySelection } from '../hooks/useOverlaySelection'
@@ -12,6 +13,11 @@ import { usePublishedOverlays } from '../hooks/usePublishedOverlays'
 import { useDroneMarkers } from '../hooks/useDroneMarkers'
 import { useDroneTracking } from '../../tracking/hooks/useDroneTracking'
 import { useProjectedTarget } from '../hooks/useProjectedTarget'
+import {
+  parseCoordinateQuery,
+  searchLocations,
+  type LocationSearchResult,
+} from '../services/locationSearch'
 import type {
   CommandDispatchStatus,
   CommandTarget,
@@ -41,6 +47,14 @@ interface DroneMapProps {
   commandStatus: CommandDispatchStatus
   highlightedCandidate: OsmCandidate | null
   selectedBoundaryGeometry: Geometry | null
+  calibrationDragEnabled?: boolean
+  onCalibrationDragDelta?: (deltaLon: number, deltaLat: number) => void
+  onCalibrationRotateDelta?: (deltaDeg: number) => void
+  previewCalibration?: {
+    offsetLon: number
+    offsetLat: number
+    rotationDeg: number
+  } | null
   isFetchingCandidates: boolean
   isFetchingFull: boolean
   locationFetchMessage: { tone: 'success' | 'error' | 'info'; text: string } | null
@@ -64,6 +78,8 @@ interface DroneMapProps {
     clearTracking: () => void
     saveTrackingRoute: () => Promise<SaveTrackedRouteResponse>
   } | null) => void
+  disableTargetSelect?: boolean
+  hideTargetPopover?: boolean
 }
 
 export function DroneMap({
@@ -74,6 +90,10 @@ export function DroneMap({
   commandStatus,
   highlightedCandidate,
   selectedBoundaryGeometry,
+  calibrationDragEnabled = false,
+  onCalibrationDragDelta,
+  onCalibrationRotateDelta,
+  previewCalibration = null,
   isFetchingCandidates,
   isFetchingFull,
   locationFetchMessage,
@@ -85,10 +105,22 @@ export function DroneMap({
   selectedTrackingDroneId,
   onTrackingStateChange,
   onTrackingControllerReady,
+  disableTargetSelect = false,
+  hideTargetPopover = false,
 }: DroneMapProps) {
   const isTrackingRef = useRef(false)
   const stopTrackingRef = useRef<() => void>(() => {})
+  const searchAbortRef = useRef<AbortController | null>(null)
+  const searchPanelRef = useRef<HTMLDivElement | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<LocationSearchResult[]>([])
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const handleMapTargetSelect = useCallback((target: MapTargetDraft) => {
+    if (disableTargetSelect) {
+      return
+    }
     if (isTrackingRef.current) {
       stopTrackingRef.current()
       onTrackingNotice({
@@ -99,8 +131,14 @@ export function DroneMap({
       return
     }
     onTargetSelect(target)
-  }, [onTargetSelect, onTrackingNotice])
-  const { containerRef, map, mapStatus } = useBaseMap(handleMapTargetSelect)
+  }, [disableTargetSelect, onTargetSelect, onTrackingNotice])
+	  const {
+    containerRef,
+    map,
+    mapStatus,
+    baseMapMode,
+    setBaseMapMode,
+  } = useBaseMap(handleMapTargetSelect)
   const tracking = useDroneTracking({
     map,
     onNotice: onTrackingNotice,
@@ -146,6 +184,23 @@ export function DroneMap({
   }, [tracking.status])
 
   useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!searchPanelRef.current?.contains(event.target as Node)) {
+        setSearchOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      searchAbortRef.current?.abort()
+    }
+  }, [])
+
+  useEffect(() => {
     const handleQuickStop = (event: KeyboardEvent) => {
       if (tracking.status !== 'tracking') {
         return
@@ -187,12 +242,81 @@ export function DroneMap({
     selectedOverlayProject,
     overlayFloors,
     nearestOverlayProjects,
-  } = useOverlaySelection()
-
+	  } = useOverlaySelection()
   const handleFocusVietnam = useCallback(() => {
     if (!map) return
     fitVietnamOverview(map)
   }, [map])
+
+  const focusTarget = useCallback((target: MapTargetDraft) => {
+    onTargetSelect(target)
+    if (!map) {
+      return
+    }
+    map.easeTo({
+      center: [target.lon, target.lat],
+      zoom: Math.max(map.getZoom(), 16),
+      duration: 700,
+      essential: true,
+    })
+  }, [map, onTargetSelect])
+
+  const handleSearchSubmit = useCallback(async () => {
+    const trimmedQuery = searchQuery.trim()
+    if (!trimmedQuery) {
+      setSearchError('Enter a place name or coordinates.')
+      setSearchResults([])
+      setSearchOpen(true)
+      return
+    }
+
+    const coordinateTarget = parseCoordinateQuery(trimmedQuery)
+    if (coordinateTarget) {
+      setSearchError(null)
+      setSearchResults([])
+      setSearchOpen(false)
+      focusTarget(coordinateTarget)
+      return
+    }
+
+    searchAbortRef.current?.abort()
+    const controller = new AbortController()
+    searchAbortRef.current = controller
+    setSearchLoading(true)
+    setSearchError(null)
+    setSearchOpen(true)
+
+    try {
+      const results = await searchLocations(trimmedQuery, controller.signal)
+      setSearchResults(results)
+      if (results.length === 0) {
+        setSearchError('No place matched that search.')
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return
+      }
+      setSearchResults([])
+      setSearchError(
+        error instanceof Error ? error.message : 'Unable to search this place right now.',
+      )
+    } finally {
+      if (!controller.signal.aborted) {
+        setSearchLoading(false)
+      }
+    }
+  }, [focusTarget, searchQuery])
+
+  const handleSelectSearchResult = useCallback((result: LocationSearchResult) => {
+    setSearchQuery(result.label)
+    setSearchResults([])
+    setSearchError(null)
+    setSearchOpen(false)
+    focusTarget({
+      lat: result.lat,
+      lon: result.lon,
+    })
+  }, [focusTarget])
 
   useDroneMarkers({
     map,
@@ -222,6 +346,10 @@ export function DroneMap({
     map,
     highlightedCandidate,
     selectedBoundaryGeometry,
+    calibrationDragEnabled,
+    onCalibrationDragDelta,
+    onCalibrationRotateDelta,
+    previewCalibration,
   })
 
   useEffect(() => {
@@ -254,29 +382,85 @@ export function DroneMap({
           </div>
         </div>
       ) : null}
-      <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-[min(26rem,calc(100%-2rem))] rounded-lg border border-slate-200 bg-white/95 px-3 py-2 text-sm text-slate-900 shadow-lg backdrop-blur">
-        <div className="flex items-center gap-2 font-semibold">
-          <MapPinned className="size-4 text-sky-600" aria-hidden="true" />
-          <span>Vietnam operations map</span>
-        </div>
-        <div className="mt-1 text-xs text-slate-600">
-          {tracking.status === 'tracking'
-            ? 'Route tracking active. Press Enter or /, or left-click map to stop.'
-            : 'Click map to set target for connected drones.'}
+      <div ref={searchPanelRef} className="absolute left-4 right-4 top-4 z-20 mx-auto max-w-xl sm:left-20 sm:right-auto sm:w-[28rem]">
+        <div className="rounded-2xl border border-slate-200 bg-white/96 p-2 shadow-xl backdrop-blur">
+          <div className="flex items-center gap-2">
+            <Search className="ml-2 size-4 shrink-0 text-slate-400" aria-hidden="true" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => {
+                setSearchQuery(event.target.value)
+                setSearchError(null)
+              }}
+              onFocus={() => {
+                if (searchResults.length > 0 || searchError) {
+                  setSearchOpen(true)
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void handleSearchSubmit()
+                }
+              }}
+              placeholder="Search place or lat, lon"
+              className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400"
+              aria-label="Search place or coordinates"
+            />
+            <button
+              type="button"
+              onClick={() => void handleSearchSubmit()}
+              disabled={searchLoading}
+              className="inline-flex h-10 items-center justify-center rounded-xl bg-sky-600 px-4 text-sm font-semibold text-white transition hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-sky-300"
+            >
+              {searchLoading ? 'Searching...' : 'Go'}
+            </button>
+          </div>
+          {searchOpen && (searchResults.length > 0 || searchError) ? (
+            <div className="mt-2 border-t border-slate-200 pt-2">
+              {searchError ? (
+                <div className="px-2 py-2 text-sm text-rose-700">{searchError}</div>
+              ) : null}
+              {searchResults.length > 0 ? (
+                <div className="max-h-64 space-y-1 overflow-y-auto">
+                  {searchResults.map((result) => (
+                    <button
+                      key={result.id}
+                      type="button"
+                      onClick={() => handleSelectSearchResult(result)}
+                      className="block w-full rounded-xl px-3 py-2 text-left transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <div className="line-clamp-2 text-sm font-medium text-slate-900">
+                        {result.label}
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-slate-500">
+                        {result.lat.toFixed(6)}, {result.lon.toFixed(6)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
       <button
         type="button"
-        className="absolute left-4 top-20 z-20 inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+        className="absolute left-4 top-24 z-20 inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 focus:outline-none focus:ring-2 focus:ring-sky-500 sm:left-auto sm:right-4 sm:top-4"
         onClick={handleFocusVietnam}
       >
         <Navigation className="size-3.5" aria-hidden="true" />
-        Focus Vietnam
+        Reset view
       </button>
+      <GoogleBaseMapPicker
+        mode={baseMapMode}
+        onChange={setBaseMapMode}
+        className="absolute bottom-4 left-4 z-20"
+      />
       {overlayZoom >= PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM && nearestOverlayProjects.length > 0 ? (
-        <div className="absolute left-4 top-32 z-20 w-72 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
-          <div className="mb-1 font-semibold text-sky-700">Spatial Maps</div>
-          <div className="mb-2 text-[11px] text-slate-500">Nearest maps first</div>
+        <div className="absolute left-4 top-16 z-20 w-72 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
+          <div className="mb-2 font-semibold text-slate-900">Saved maps nearby</div>
           <div className="max-h-36 space-y-1 overflow-y-auto border-b border-slate-200 pb-2">
             {nearestOverlayProjects.map((project) => {
               const active = project.id === selectedOverlayProjectId
@@ -300,7 +484,7 @@ export function DroneMap({
             })}
           </div>
           <div className="mt-2 text-[11px] text-slate-500">
-            {selectedOverlayProject ? selectedOverlayProject.name : 'Select a building'}
+            {selectedOverlayProject ? selectedOverlayProject.name : 'Select a map'}
           </div>
           {selectedOverlayProject ? (
             <button
@@ -325,7 +509,7 @@ export function DroneMap({
                   }`}
                   onClick={() => setSelectedOverlayFloorId(floor.id)}
                 >
-                  {floor.label} <span className="text-[10px] text-slate-500">{floor.code}</span>
+                  {floor.label}
                 </button>
               ))
             ) : (
@@ -334,7 +518,7 @@ export function DroneMap({
           </div>
         </div>
       ) : null}
-      {selectedTarget && tracking.status !== 'tracking' ? (
+      {selectedTarget && tracking.status !== 'tracking' && !hideTargetPopover ? (
         <TargetCommandPopover
           target={selectedTarget}
           point={targetPoint}

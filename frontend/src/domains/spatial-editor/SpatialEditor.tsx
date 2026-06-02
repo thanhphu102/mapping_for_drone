@@ -21,6 +21,7 @@ import { EditorSidebar } from './components/EditorSidebar'
 import { FloorSelector } from './components/FloorSelector'
 import { BuildingEntryOverlay } from './components/BuildingEntryOverlay'
 import { SpatialCanvasOverlay } from './components/SpatialCanvasOverlay'
+import { EditorBackdropPicker } from './components/EditorBackdropPicker'
 import { useMapRenderer } from './hooks/useMapRenderer'
 import { useSnapEngine, type SnapPreview } from './hooks/useSnapEngine'
 import {
@@ -39,7 +40,13 @@ import { useImportScanJson } from './hooks/useImportScanJson'
 import { usePublishProject } from './hooks/usePublishProject'
 import { useInspectorFormState } from './hooks/useInspectorFormState'
 import { geometryInsideBoundaryStrict } from './geometry/validation'
+import { GoogleBaseMapPicker } from '../map/components/GoogleBaseMapPicker'
 import { writeStoredMainMapCamera } from '../map/utils/mainMapCamera'
+import {
+  readStoredEditorBackdropMode,
+  writeStoredEditorBackdropMode,
+  type EditorBackdropMode,
+} from './editorBackdropMode'
 
 function isEditableEventTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -191,7 +198,15 @@ function InlineTextBoxEditor({
 }
 
 function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
-  const { map, mapReady, mapLoaded, mapZoom, containerRef } = useMapContext()
+  const {
+    map,
+    mapReady,
+    mapLoaded,
+    mapZoom,
+    baseMapMode,
+    setBaseMapMode,
+    containerRef,
+  } = useMapContext()
   const isMountedRef = useRef(false)
   const fittedProjectIdRef = useRef<string | null>(null)
   const modeRef = useRef<DrawMode>('select')
@@ -219,8 +234,11 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [boundaryRendered, setBoundaryRendered] = useState(false)
   const [snapPreview, setSnapPreview] = useState<SnapPreview | null>(null)
   const [showFloorSelector, setShowFloorSelector] = useState(false)
+  const [backdropMode, setBackdropMode] = useState<EditorBackdropMode>(
+    readStoredEditorBackdropMode,
+  )
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
-  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(true)
   const [mobileStructureOpen, setMobileStructureOpen] = useState(false)
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<string[]>([])
@@ -268,18 +286,12 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const toolsEnabled = mapReady
 
   const featureIdForState = useCallback((feature: Feature) => String(feature.id ?? feature.properties?.id ?? ''), [])
-
-  const visibleFeatures = useMemo(() => {
-    const deleted = new Set(pendingDeletedFeatureIds)
-    const updated = pendingUpdatedFeatures
-    const merged = serverFeatures
-      .filter((feature) => {
-        const id = featureIdForState(feature)
-        return !deleted.has(id)
-      })
-      .map((feature) => updated[featureIdForState(feature)] ?? feature)
-    return [...merged, ...pendingCreatedFeatures]
-  }, [featureIdForState, pendingCreatedFeatures, pendingDeletedFeatureIds, pendingUpdatedFeatures, serverFeatures])
+  const featureFloorIdForState = useCallback((feature: Feature) => {
+    const spatialFeature = feature as SpatialFeature
+    return spatialFeature.floorId
+      ?? (feature.properties as Record<string, unknown> | undefined)?.floorId
+      ?? null
+  }, [])
 
   const draftCollection = currentDraftCollection
   const localDraftFeatureIds = useMemo(
@@ -315,6 +327,37 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const floorRequired = project?.editorMode === 'building' || project?.editorMode === 'indoor'
   const canShowFloorSelector = Boolean(floorRequired || hasFloors)
   const canDrawOnFloor = !floorRequired || Boolean(selectedFloorId)
+
+  const visibleFeatures = useMemo(() => {
+    const deleted = new Set(pendingDeletedFeatureIds)
+    const updated = pendingUpdatedFeatures
+    const merged = serverFeatures
+      .filter((feature) => {
+        const id = featureIdForState(feature)
+        return !deleted.has(id)
+      })
+      .map((feature) => updated[featureIdForState(feature)] ?? feature)
+    const combined = [...merged, ...pendingCreatedFeatures]
+    if (hasFloors) {
+      if (!selectedFloorId) {
+        return []
+      }
+      return combined.filter((feature) => featureFloorIdForState(feature) === selectedFloorId)
+    }
+    if (!selectedFloorId) {
+      return combined
+    }
+    return combined.filter((feature) => featureFloorIdForState(feature) === selectedFloorId)
+  }, [
+    featureFloorIdForState,
+    featureIdForState,
+    hasFloors,
+    pendingCreatedFeatures,
+    pendingDeletedFeatureIds,
+    pendingUpdatedFeatures,
+    selectedFloorId,
+    serverFeatures,
+  ])
 
   // --- Sync refs ---
   useEffect(() => {
@@ -1136,6 +1179,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     mapZoom,
     project,
     projectConfig,
+    backdropMode,
     visibleFeatures,
     selectedFeatureIds,
     draftCollection,
@@ -1144,6 +1188,10 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onBoundaryRendered: handleBoundaryRendered,
     onMessage: handleMessage,
   })
+
+  useEffect(() => {
+    writeStoredEditorBackdropMode(backdropMode)
+  }, [backdropMode])
 
   // --- Project data loading ---
   // Load data when activeProjectId changes
@@ -1466,64 +1514,23 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   return (
     <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-100 text-slate-950">
-      <div className={`hidden overflow-hidden border-r border-slate-200 bg-white transition-all lg:block ${
-        leftSidebarCollapsed ? 'w-[64px]' : 'w-[320px] max-w-[34vw]'
-      }`}>
-        <div className="border-b border-slate-200 bg-white px-2 py-2">
-          <button
-            type="button"
-            className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            onClick={() => setLeftSidebarCollapsed((current) => !current)}
-          >
-            {leftSidebarCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
-            {leftSidebarCollapsed ? 'Open' : 'Collapse'}
-          </button>
-        </div>
-        {leftSidebarCollapsed ? (
-          <div className="flex h-[calc(100%-45px)] items-center justify-center">
-            <PanelLeftOpen className="size-5 text-slate-400" />
-          </div>
-        ) : (
-          <EditorStructurePanel
-            project={project}
-            floors={floors}
-            selectedFloorId={selectedFloorId}
-            onSelectFloor={setSelectedFloorId}
-            selectedFeatureIds={selectedFeatureIds}
-            onSelectFeatureIds={setSelectedFeatureIds}
-            visibleFeatures={visibleFeatures}
-            tagFilter={tagFilter}
-            onTagFilterChange={setTagFilter}
-            onCreateFloor={handleCreateFloor}
-            isCreatingFloor={isCreatingFloor}
-            onUpdateFloor={handleUpdateFloor}
-            onDeleteFloor={handleDeleteFloor}
-            isUpdatingFloor={isUpdatingFloor}
-            importPreview={importPreview}
-            importError={importError}
-            importLoading={importLoading}
-            onPreviewImport={handlePreviewImport}
-            onCommitImport={handleCommitImport}
-            onUnpreviewImport={handleUnpreviewImport}
-          />
-        )}
-      </div>
-
       <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-200">
         <div
           ref={containerRef}
           className="absolute inset-0 h-full w-full"
           aria-label="Spatial editor map"
         />
-        <button
-          type="button"
-          className="absolute left-4 top-4 z-30 inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-sm font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900"
-          onClick={handleBackToMainMap}
-          aria-label="Back to main map"
-        >
-          <ArrowLeft className="size-4" aria-hidden="true" />
-          <span>Main map</span>
-        </button>
+        <div className="absolute left-4 top-4 z-30 flex items-center gap-2 lg:hidden">
+          <button
+            type="button"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+            onClick={handleBackToMainMap}
+            aria-label="Back to main map"
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+            <span>Main map</span>
+          </button>
+        </div>
         <div className="absolute right-4 top-4 z-30 flex items-center gap-2 lg:hidden">
           <button
             type="button"
@@ -1595,7 +1602,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         {canShowFloorSelector ? (
           <button
             type="button"
-            className="absolute right-4 top-4 z-30 rounded-lg border border-slate-300 bg-white/95 px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800"
+            className="absolute right-4 top-4 z-30 rounded-lg border border-slate-300 bg-white/95 px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 lg:hidden"
             onClick={() => setShowFloorSelector((value) => !value)}
           >
             Floors
@@ -1610,6 +1617,16 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             isRequired={Boolean(floorRequired)}
           />
         ) : null}
+        <div className="absolute bottom-5 right-4 z-30 flex flex-col items-end gap-2 lg:hidden">
+          <EditorBackdropPicker
+            mode={backdropMode}
+            onChange={setBackdropMode}
+          />
+          <GoogleBaseMapPicker
+            mode={baseMapMode}
+            onChange={setBaseMapMode}
+          />
+        </div>
         {selectedBuildingFeature ? (
           <BuildingEntryOverlay
             buildingName={String(selectedBuildingFeature.properties?.name ?? selectedBuildingFeature.properties?.featureType ?? 'Building')}
@@ -1622,7 +1639,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           />
         ) : null}
         {breadcrumb && breadcrumb.length > 1 ? (
-          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 px-3 py-1.5 text-sm shadow-lg backdrop-blur">
+          <div className="absolute bottom-4 left-4 z-20 flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm">
             <button
               type="button"
               className="text-sky-600 hover:text-sky-800 hover:underline"
@@ -1634,49 +1651,90 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             <span className="font-medium text-slate-900">{project?.name}</span>
           </div>
         ) : null}
-      </main>
-
-      <div className={`hidden overflow-hidden border-l border-slate-200 bg-white transition-all lg:block ${
-        rightSidebarCollapsed ? 'w-[64px]' : 'w-[340px] max-w-[36vw]'
-      }`}>
-        <div className="border-b border-slate-200 bg-white px-2 py-2">
-          <button
-            type="button"
-            className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            onClick={() => setRightSidebarCollapsed((current) => !current)}
+        <aside className="absolute inset-y-0 left-0 z-30 hidden w-[324px] overflow-visible lg:block">
+          <div
+            className={`absolute inset-y-0 left-0 flex w-[324px] transform-gpu items-center justify-start will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+              leftSidebarCollapsed ? '-translate-x-[300px]' : 'translate-x-0'
+            }`}
           >
-            {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
-            {rightSidebarCollapsed ? 'Open' : 'Collapse'}
-          </button>
-        </div>
-        {rightSidebarCollapsed ? (
-          <div className="flex h-[calc(100%-45px)] items-center justify-center">
-            <PanelRightOpen className="size-5 text-slate-400" />
+            <div className="h-full w-[300px] overflow-hidden rounded-r-2xl border-r border-slate-200 bg-white shadow-lg">
+              <EditorStructurePanel
+                project={project}
+                floors={floors}
+                selectedFloorId={selectedFloorId}
+                onSelectFloor={setSelectedFloorId}
+                selectedFeatureIds={selectedFeatureIds}
+                onSelectFeatureIds={setSelectedFeatureIds}
+                visibleFeatures={visibleFeatures}
+                tagFilter={tagFilter}
+                onTagFilterChange={setTagFilter}
+                onCreateFloor={handleCreateFloor}
+                isCreatingFloor={isCreatingFloor}
+                onUpdateFloor={handleUpdateFloor}
+                onDeleteFloor={handleDeleteFloor}
+                isUpdatingFloor={isUpdatingFloor}
+                importPreview={importPreview}
+                importError={importError}
+                importLoading={importLoading}
+                onPreviewImport={handlePreviewImport}
+                onCommitImport={handleCommitImport}
+                onUnpreviewImport={handleUnpreviewImport}
+              />
+            </div>
+            <button
+              type="button"
+              className="ml-[-1px] flex h-14 w-6 items-center justify-center rounded-r-full border border-slate-200 border-l-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
+              onClick={() => setLeftSidebarCollapsed((current) => !current)}
+              aria-label={leftSidebarCollapsed ? 'Open project panel' : 'Collapse project panel'}
+            >
+              {leftSidebarCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
+            </button>
           </div>
-        ) : (
-          <EditorSidebar
-            project={project}
-            projectConfig={projectConfig}
-            floors={floors}
-            selectedFloorId={selectedFloorId}
-            mapZoom={mapZoom}
-            mapReady={mapReady}
-            boundaryRendered={boundaryRendered}
-            visibleFeatures={visibleFeatures}
-            draftFeature={draftCollection}
-            hoverCoordinate={hoverCoordinate}
-            snapPreview={snapPreview}
-            message={message}
-            selectedFeatures={selectedFeatures}
-            inspectorDraft={inspectorDraft}
-            onInspectorNameChange={setInspectorName}
-            onInspectorTagChange={setInspectorTag}
-            onInspectorNoteChange={setInspectorNoteText}
-            onSaveInspector={handleSaveInspector}
-            isSavingInspector={isSavingInspector}
-          />
-        )}
-      </div>
+        </aside>
+        <aside className="absolute inset-y-0 right-0 z-30 hidden w-[344px] overflow-visible lg:block">
+          <div
+            className={`absolute inset-y-0 right-0 flex w-[344px] transform-gpu items-center justify-end will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+              rightSidebarCollapsed ? 'translate-x-[320px]' : 'translate-x-0'
+            }`}
+          >
+            <button
+              type="button"
+              className="mr-[-1px] flex h-14 w-6 items-center justify-center rounded-l-full border border-slate-200 border-r-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
+              onClick={() => setRightSidebarCollapsed((current) => !current)}
+              aria-label={rightSidebarCollapsed ? 'Open inspector panel' : 'Collapse inspector panel'}
+            >
+              {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
+            </button>
+            <div className="h-full w-[320px] overflow-hidden rounded-l-2xl border-l border-slate-200 bg-white shadow-lg">
+              <EditorSidebar
+                project={project}
+                projectConfig={projectConfig}
+                floors={floors}
+                selectedFloorId={selectedFloorId}
+                mapZoom={mapZoom}
+                mapReady={mapReady}
+                boundaryRendered={boundaryRendered}
+                baseMapMode={baseMapMode}
+                backdropMode={backdropMode}
+                visibleFeatures={visibleFeatures}
+                draftFeature={draftCollection}
+                hoverCoordinate={hoverCoordinate}
+                snapPreview={snapPreview}
+                message={message}
+                selectedFeatures={selectedFeatures}
+                inspectorDraft={inspectorDraft}
+                onInspectorNameChange={setInspectorName}
+                onInspectorTagChange={setInspectorTag}
+                onInspectorNoteChange={setInspectorNoteText}
+                onBaseMapModeChange={setBaseMapMode}
+                onBackdropModeChange={setBackdropMode}
+                onSaveInspector={handleSaveInspector}
+                isSavingInspector={isSavingInspector}
+              />
+            </div>
+          </div>
+        </aside>
+      </main>
 
       {mobileStructureOpen ? (
         <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileStructureOpen(false)}>
@@ -1718,6 +1776,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               mapZoom={mapZoom}
               mapReady={mapReady}
               boundaryRendered={boundaryRendered}
+              baseMapMode={baseMapMode}
+              backdropMode={backdropMode}
               visibleFeatures={visibleFeatures}
               draftFeature={draftCollection}
               hoverCoordinate={hoverCoordinate}
@@ -1728,6 +1788,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               onInspectorNameChange={setInspectorName}
               onInspectorTagChange={setInspectorTag}
               onInspectorNoteChange={setInspectorNoteText}
+              onBaseMapModeChange={setBaseMapMode}
+              onBackdropModeChange={setBackdropMode}
               onSaveInspector={handleSaveInspector}
               isSavingInspector={isSavingInspector}
             />

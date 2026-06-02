@@ -18,6 +18,15 @@ interface OverpassResponse {
   elements?: OverpassElement[]
 }
 
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
+] as const
+const OVERPASS_TIMEOUT_MS = 12000
+const OVERPASS_CACHE_TTL_MS = 90_000
+const enclosingCache = new Map<string, { at: number; data: OsmCandidate[] }>()
+
 const categoryTagPriority = [
   'amenity',
   'shop',
@@ -145,30 +154,43 @@ function asCandidateType(value: string | undefined): OsmElementType | null {
 export async function fetchEnclosingOsmElements(
   lat: number,
   lon: number,
+  options?: {
+    signal?: AbortSignal
+  },
 ): Promise<OsmCandidate[]> {
-  const overpassQuery = `
-[out:json][timeout:10];
-is_in(${lat},${lon})->.areas;
-(
-  way(pivot.areas);
-  relation(pivot.areas);
-);
-out tags geom;
-`
-  const overpassBody = new URLSearchParams({ data: overpassQuery }).toString()
-  const response = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-    },
-    body: overpassBody,
-  })
-
-  if (!response.ok) {
-    throw new Error(`Overpass API failed with HTTP ${response.status}`)
+  const cacheKey = `${lat.toFixed(6)}:${lon.toFixed(6)}`
+  const cached = enclosingCache.get(cacheKey)
+  if (cached && (Date.now() - cached.at) <= OVERPASS_CACHE_TTL_MS) {
+    return cached.data
   }
 
-  const data = (await response.json()) as OverpassResponse
+  void OVERPASS_ENDPOINTS
+  void OVERPASS_TIMEOUT_MS
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS)
+  const abortFromCaller = () => controller.abort()
+  options?.signal?.addEventListener('abort', abortFromCaller)
+  let data: OverpassResponse | null = null
+  try {
+    const response = await fetch(
+      `/api/osm/enclosing?lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lon))}`,
+      {
+        signal: controller.signal,
+      },
+    )
+    if (!response.ok) {
+      throw new Error(`Backend OSM enclosing request failed with HTTP ${response.status}`)
+    }
+    data = (await response.json()) as OverpassResponse
+  } finally {
+    window.clearTimeout(timeoutId)
+    options?.signal?.removeEventListener('abort', abortFromCaller)
+  }
+
+  if (!data) {
+    throw new Error('Backend OSM enclosing response is empty')
+  }
+
   const elements = data.elements ?? []
   const candidates: OsmCandidate[] = []
   const seen = new Set<string>()
@@ -201,6 +223,7 @@ out tags geom;
     })
   }
 
+  enclosingCache.set(cacheKey, { at: Date.now(), data: candidates })
   return candidates
 }
 

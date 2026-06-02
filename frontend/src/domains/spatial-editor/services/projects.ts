@@ -1,13 +1,25 @@
 import type { Feature, FeatureCollection, MultiPolygon, Polygon } from 'geojson'
-import type { OsmElementGeometryResponse, OsmElementType } from '../../osm/types'
+import type {
+  OsmCityCalibration,
+  OsmElementGeometryResponse,
+  OsmElementType,
+} from '../../osm/types'
 import type { DrawingProject } from '../types'
 import { readJsonResponse } from './api'
 
 export async function fetchOsmElementGeometry(
   osmType: OsmElementType,
   osmId: number,
+  options?: {
+    calibrationCityKey?: string
+  },
 ): Promise<OsmElementGeometryResponse> {
-  const response = await fetch(`/api/osm/elements/${osmType}/${osmId}/geometry`)
+  const params = new URLSearchParams()
+  if (options?.calibrationCityKey) {
+    params.set('calibrationCityKey', options.calibrationCityKey)
+  }
+  const query = params.toString()
+  const response = await fetch(`/api/osm/elements/${osmType}/${osmId}/geometry${query ? `?${query}` : ''}`)
   const data = await readJsonResponse<OsmElementGeometryResponse | null>(response)
 
   if (!data || typeof data !== 'object') {
@@ -25,8 +37,12 @@ export async function createDrawingProjectFromOsm(
   osmType: OsmElementType,
   osmId: number,
   options?: {
+    calibrationCityKey?: string
     editorModeOverride?: string
     confirmedLargeArea?: boolean
+    calibrationOffsetLon?: number
+    calibrationOffsetLat?: number
+    calibrationRotationDeg?: number
   },
 ): Promise<{
   projectId: string
@@ -42,8 +58,12 @@ export async function createDrawingProjectFromOsm(
     body: JSON.stringify({
       osmType,
       osmId,
+      calibrationCityKey: options?.calibrationCityKey,
       editorModeOverride: options?.editorModeOverride,
       confirmedLargeArea: options?.confirmedLargeArea,
+      calibrationOffsetLon: options?.calibrationOffsetLon ?? 0,
+      calibrationOffsetLat: options?.calibrationOffsetLat ?? 0,
+      calibrationRotationDeg: options?.calibrationRotationDeg ?? 0,
     }),
   })
   const data = (await response.json().catch(() => null)) as
@@ -83,6 +103,37 @@ export async function createDrawingProjectFromOsm(
     editorMode: string
     warnings: string[]
   }
+}
+
+export async function fetchOsmCityCalibration(
+  cityKey: string,
+): Promise<OsmCityCalibration | null> {
+  const response = await fetch(
+    `/api/osm/calibrations/by-city?cityKey=${encodeURIComponent(cityKey)}`,
+  )
+  const data = await readJsonResponse<{
+    cityKey: string
+    calibration: OsmCityCalibration | null
+  }>(response)
+  return data.calibration
+}
+
+export async function saveOsmCityCalibration(
+  payload: Omit<OsmCityCalibration, 'updatedAt'>,
+): Promise<OsmCityCalibration> {
+  const response = await fetch('/api/osm/calibrations/by-city', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+  const data = await readJsonResponse<{
+    ok: boolean
+    cityKey: string
+    calibration: OsmCityCalibration
+  }>(response)
+  return data.calibration
 }
 
 export async function fetchDrawingProject(

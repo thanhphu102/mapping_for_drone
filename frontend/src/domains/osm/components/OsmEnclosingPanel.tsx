@@ -18,9 +18,23 @@ interface OsmEnclosingPanelProps {
   status?: OsmPanelStatus | null
   isOpeningEditor?: boolean
   confirmedLargeArea?: boolean
+  calibration?: {
+    cityKey: string | null
+    cityLabel: string | null
+    offsetLon: number
+    offsetLat: number
+    rotationDeg: number
+    isDirty: boolean
+  }
+  calibrationDragEnabled?: boolean
+  isSavingCalibration?: boolean
   onHoverCandidate: (candidate: OsmCandidate | null) => void
   onSelectCandidate: (candidate: OsmCandidate) => void
   onChangeEditorMode: (mode: EditorMode) => void
+  onCalibrationOffsetChange: (field: 'offsetLon' | 'offsetLat' | 'rotationDeg', value: number) => void
+  onResetCalibration: () => void
+  onSaveCalibrationForCity: () => void
+  onToggleCalibrationDrag: () => void
   onOpenSpatialEditor: () => void
   onClose: () => void
 }
@@ -51,9 +65,16 @@ export function OsmEnclosingPanel({
   status = null,
   isOpeningEditor = false,
   confirmedLargeArea = false,
+  calibration,
+  calibrationDragEnabled = false,
+  isSavingCalibration = false,
   onHoverCandidate,
   onSelectCandidate,
   onChangeEditorMode,
+  onCalibrationOffsetChange,
+  onResetCalibration,
+  onSaveCalibrationForCity,
+  onToggleCalibrationDrag,
   onOpenSpatialEditor,
   onClose,
 }: OsmEnclosingPanelProps) {
@@ -67,7 +88,7 @@ export function OsmEnclosingPanel({
         <div>
           <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
             <Layers3 className="size-4 text-sky-600" aria-hidden="true" />
-            OSM Enclosing Elements
+            Choose area
           </h2>
           {target ? (
             <p className="mt-1 flex items-center gap-1.5 font-mono text-xs text-slate-500">
@@ -129,9 +150,8 @@ export function OsmEnclosingPanel({
                       {candidate.label}
                     </div>
                     <div className="mt-1 text-slate-600">
-                      {candidate.type} {candidate.id}
+                      {candidate.category}
                     </div>
-                    <div className="text-slate-500">{candidate.category}</div>
                   </button>
                   {isSelected ? (
                     <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -150,9 +170,7 @@ export function OsmEnclosingPanel({
                         <>
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-xs font-semibold uppercase text-slate-500">
-                                Detected mode
-                              </div>
+                              <div className="text-xs font-semibold uppercase text-slate-500">Area type</div>
                               <div className="mt-1 text-sm font-semibold capitalize text-slate-950">
                                 {effectiveEditorMode}
                               </div>
@@ -162,14 +180,6 @@ export function OsmEnclosingPanel({
                             </div>
                           </div>
                           <div className="mt-2 space-y-1 text-xs text-slate-600">
-                            <div>
-                              <span className="font-semibold text-slate-700">Reason:</span>{' '}
-                              {candidateGeometry.classification.reason}
-                            </div>
-                            <div>
-                              <span className="font-semibold text-slate-700">Boundary:</span>{' '}
-                              {candidate.type} {candidate.id}
-                            </div>
                             <div>
                               <span className="font-semibold text-slate-700">Perimeter:</span>{' '}
                               {(candidateGeometry.perimeterM / 1000).toFixed(2)} km
@@ -188,9 +198,7 @@ export function OsmEnclosingPanel({
                             </div>
                           ) : null}
                           <div className="mt-3">
-                            <div className="text-xs font-semibold uppercase text-slate-500">
-                              Change mode
-                            </div>
+                            <div className="text-xs font-semibold uppercase text-slate-500">Use as</div>
                             <div className="mt-2 flex flex-wrap gap-2">
                               {editorModes.map((mode) => (
                                 <button
@@ -208,6 +216,85 @@ export function OsmEnclosingPanel({
                               ))}
                             </div>
                           </div>
+                          <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
+                            <div className="text-xs font-semibold uppercase text-slate-500">Calibrate boundary</div>
+                            <div className="mt-1 text-xs text-slate-600">
+                              {calibration?.cityLabel || calibration?.cityKey || 'No city key'}
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-xs text-slate-600">
+                                Lon
+                                <input
+                                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                  type="number"
+                                  step="0.000001"
+                                  value={calibration?.offsetLon ?? 0}
+                                  onChange={(event) => onCalibrationOffsetChange('offsetLon', Number(event.target.value))}
+                                />
+                              </label>
+                              <label className="text-xs text-slate-600">
+                                Lat
+                                <input
+                                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                  type="number"
+                                  step="0.000001"
+                                  value={calibration?.offsetLat ?? 0}
+                                  onChange={(event) => onCalibrationOffsetChange('offsetLat', Number(event.target.value))}
+                                />
+                              </label>
+                            </div>
+                            <label className="mt-2 block text-xs text-slate-600">
+                              Rotation (deg)
+                              <input
+                                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                type="number"
+                                step="0.1"
+                                value={calibration?.rotationDeg ?? 0}
+                                onChange={(event) => onCalibrationOffsetChange('rotationDeg', Number(event.target.value))}
+                              />
+                            </label>
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                className={`rounded-md border px-2 py-1 text-xs font-medium ${
+                                  calibrationDragEnabled
+                                    ? 'border-sky-300 bg-sky-50 text-sky-800'
+                                    : 'border-slate-300 bg-white text-slate-700'
+                                }`}
+                                onClick={onToggleCalibrationDrag}
+                              >
+                                {calibrationDragEnabled ? 'Dragging on map' : 'Drag calibrate'}
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700"
+                                onClick={onResetCalibration}
+                              >
+                                Reset
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-800 disabled:opacity-50"
+                                onClick={onSaveCalibrationForCity}
+                                disabled={isSavingCalibration}
+                              >
+                                {isSavingCalibration ? 'Saving...' : 'Save for city'}
+                              </button>
+                            </div>
+                          </div>
+                          <details className="mt-3 rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600">
+                            <summary className="cursor-pointer font-medium text-slate-700">More details</summary>
+                            <div className="mt-2 space-y-1">
+                              <div>
+                                <span className="font-semibold text-slate-700">Reason:</span>{' '}
+                                {candidateGeometry.classification.reason}
+                              </div>
+                              <div>
+                                <span className="font-semibold text-slate-700">Source:</span>{' '}
+                                {candidate.type} {candidate.id}
+                              </div>
+                            </div>
+                          </details>
                           <button
                             type="button"
                             className="mt-3 flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"

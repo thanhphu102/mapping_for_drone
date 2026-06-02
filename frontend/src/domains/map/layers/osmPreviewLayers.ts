@@ -155,3 +155,91 @@ export function candidateToFeatureCollection(
     features: fallbackFeature ? [fallbackFeature] : [],
   }
 }
+
+function geometryPositions(geometry: Geometry): Position[] {
+  if (geometry.type === 'Point') return [geometry.coordinates]
+  if (geometry.type === 'MultiPoint' || geometry.type === 'LineString') return geometry.coordinates
+  if (geometry.type === 'MultiLineString' || geometry.type === 'Polygon') return geometry.coordinates.flat(1)
+  if (geometry.type === 'MultiPolygon') return geometry.coordinates.flat(2)
+  return []
+}
+
+function geometryCentroid(geometry: Geometry): Position | null {
+  const pts = geometryPositions(geometry)
+  if (pts.length === 0) return null
+  let lon = 0
+  let lat = 0
+  pts.forEach(([x, y]) => {
+    lon += x
+    lat += y
+  })
+  return [lon / pts.length, lat / pts.length]
+}
+
+function transformPosition(
+  position: Position,
+  center: Position,
+  offsetLon: number,
+  offsetLat: number,
+  rotationDeg: number,
+): Position {
+  const [lon, lat] = position
+  const [centerLon, centerLat] = center
+  const rad = (rotationDeg * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const dx = lon - centerLon
+  const dy = lat - centerLat
+  return [
+    ((dx * cos) - (dy * sin)) + centerLon + offsetLon,
+    ((dx * sin) + (dy * cos)) + centerLat + offsetLat,
+  ]
+}
+
+function transformGeometry(
+  geometry: Geometry,
+  center: Position,
+  offsetLon: number,
+  offsetLat: number,
+  rotationDeg: number,
+): Geometry {
+  if (geometry.type === 'Point') {
+    return { ...geometry, coordinates: transformPosition(geometry.coordinates, center, offsetLon, offsetLat, rotationDeg) }
+  }
+  if (geometry.type === 'MultiPoint') {
+    return { ...geometry, coordinates: geometry.coordinates.map((p) => transformPosition(p, center, offsetLon, offsetLat, rotationDeg)) }
+  }
+  if (geometry.type === 'LineString') {
+    return { ...geometry, coordinates: geometry.coordinates.map((p) => transformPosition(p, center, offsetLon, offsetLat, rotationDeg)) }
+  }
+  if (geometry.type === 'MultiLineString') {
+    return { ...geometry, coordinates: geometry.coordinates.map((line) => line.map((p) => transformPosition(p, center, offsetLon, offsetLat, rotationDeg))) }
+  }
+  if (geometry.type === 'Polygon') {
+    return { ...geometry, coordinates: geometry.coordinates.map((ring) => ring.map((p) => transformPosition(p, center, offsetLon, offsetLat, rotationDeg))) }
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return { ...geometry, coordinates: geometry.coordinates.map((poly) => poly.map((ring) => ring.map((p) => transformPosition(p, center, offsetLon, offsetLat, rotationDeg)))) }
+  }
+  return geometry
+}
+
+export function transformPreviewFeatureCollection(
+  collection: FeatureCollection<Geometry>,
+  transform: { offsetLon: number; offsetLat: number; rotationDeg: number } | null,
+): FeatureCollection<Geometry> {
+  if (!transform) return collection
+  const hasTransform = transform.offsetLon !== 0 || transform.offsetLat !== 0 || transform.rotationDeg !== 0
+  if (!hasTransform) return collection
+  const firstGeometry = collection.features[0]?.geometry
+  if (!firstGeometry) return collection
+  const center = geometryCentroid(firstGeometry)
+  if (!center) return collection
+  return {
+    type: 'FeatureCollection',
+    features: collection.features.map((feature) => ({
+      ...feature,
+      geometry: transformGeometry(feature.geometry, center, transform.offsetLon, transform.offsetLat, transform.rotationDeg),
+    })),
+  }
+}

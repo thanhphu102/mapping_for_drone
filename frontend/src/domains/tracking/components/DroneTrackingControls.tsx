@@ -28,19 +28,19 @@ export function DroneTrackingControls({
   const hasDrone = Boolean(selectedDroneId)
 
   const baseButtonClass =
-    'w-full rounded-2xl px-6 py-4 text-lg font-semibold backdrop-blur transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50'
+    'rounded-lg px-4 py-2.5 text-sm font-semibold transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-50'
 
   const startButtonClass =
-    'border border-sky-300/70 bg-gradient-to-r from-sky-50/80 via-sky-100/70 to-blue-50/80 text-sky-700 shadow-[0_12px_30px_rgba(14,165,233,0.16)] hover:border-sky-400/80 hover:from-sky-100/90 hover:via-sky-100/90 hover:to-blue-100/90 hover:shadow-[0_16px_36px_rgba(14,165,233,0.22)] focus:ring-4 focus:ring-sky-200/70'
+    'border border-sky-300 bg-sky-100 text-sky-900 hover:border-sky-400 hover:bg-sky-200 focus:ring-2 focus:ring-sky-300'
 
   const stopButtonClass =
-    'border border-rose-300/70 bg-gradient-to-r from-rose-50/80 via-pink-100/70 to-rose-50/80 text-rose-600 shadow-[0_12px_30px_rgba(244,63,94,0.16)] hover:border-rose-400/80 hover:from-rose-100/90 hover:via-pink-100/90 hover:to-rose-100/90 hover:shadow-[0_16px_36px_rgba(244,63,94,0.22)] focus:ring-4 focus:ring-rose-200/70'
+    'border border-rose-300 bg-rose-50 text-rose-700 hover:border-rose-400 hover:bg-rose-100 focus:ring-2 focus:ring-rose-300'
 
   const saveButtonClass =
-    'border border-emerald-300/70 bg-gradient-to-r from-emerald-50/80 via-teal-100/60 to-emerald-50/80 text-emerald-700 shadow-[0_12px_30px_rgba(16,185,129,0.16)] hover:border-emerald-400/80 hover:from-emerald-100/90 hover:via-teal-100/80 hover:to-emerald-100/90 hover:shadow-[0_16px_36px_rgba(16,185,129,0.22)] focus:ring-4 focus:ring-emerald-200/70'
+    'border border-emerald-300 bg-emerald-100 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-200 focus:ring-2 focus:ring-emerald-300'
 
   const clearButtonClass =
-    'border border-slate-200/80 bg-white/65 text-slate-600 shadow-[0_10px_24px_rgba(15,23,42,0.08)] hover:border-slate-300/90 hover:bg-slate-50/80 hover:text-slate-800 hover:shadow-[0_14px_30px_rgba(15,23,42,0.12)] focus:ring-4 focus:ring-slate-200/70'
+    'border border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 focus:ring-2 focus:ring-slate-300'
 
   const statusPillClassMap: Record<TrackingStatus, string> = {
     idle: 'bg-slate-100 text-slate-700',
@@ -51,19 +51,19 @@ export function DroneTrackingControls({
 
   return (
     <section
-      className="rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm backdrop-blur"
+      className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
       aria-live="polite"
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-950">Drone Route Tracking</h2>
+          <h2 className="text-sm font-semibold text-slate-950">Route tracking</h2>
           <p className="mt-1 text-sm text-slate-600">
             {hasDrone ? (
               <>
-                Selected: <span className="font-semibold text-slate-900">{selectedDroneId}</span>
+                Drone <span className="font-semibold text-slate-900">{selectedDroneId}</span>
               </>
             ) : (
-              'Start now and the first connected drone will be used automatically'
+              'Select a drone from the list, or start and use the first connected drone.'
             )}
           </p>
         </div>
@@ -74,29 +74,22 @@ export function DroneTrackingControls({
         </span>
       </div>
 
-      <div className="mb-4 grid grid-cols-2 gap-3 text-sm">
-        <div className="rounded-xl border border-slate-200/60 bg-slate-50/80 p-3">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</div>
-          <div className="mt-1 font-semibold capitalize text-slate-900">{status}</div>
-        </div>
-        <div className="rounded-xl border border-slate-200/60 bg-slate-50/80 p-3">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Points</div>
-          <div className="mt-1 font-semibold text-slate-900">
-            {pointsCount.toLocaleString()} / {maxPoints.toLocaleString()}
-          </div>
-        </div>
+      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+        {status === 'tracking'
+          ? `Recording route points: ${pointsCount.toLocaleString()} / ${maxPoints.toLocaleString()}`
+          : `Saved points: ${pointsCount.toLocaleString()} / ${maxPoints.toLocaleString()}`}
       </div>
 
       <div className="space-y-2">
         {status === 'tracking' ? (
-          <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+          <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
             Quick stop: press <span className="font-semibold">Enter</span>, <span className="font-semibold">/</span>, or left-click map.
           </div>
         ) : null}
         {status === 'tracking' ? (
           <button
             type="button"
-            className={`${baseButtonClass} ${stopButtonClass}`}
+            className={`w-full ${baseButtonClass} ${stopButtonClass}`}
             onClick={onStop}
           >
             Stop Tracking
@@ -104,7 +97,7 @@ export function DroneTrackingControls({
         ) : (
           <button
             type="button"
-            className={`${baseButtonClass} ${startButtonClass}`}
+            className={`w-full ${baseButtonClass} ${startButtonClass}`}
             onClick={onStart}
           >
             Start Tracking
@@ -115,7 +108,7 @@ export function DroneTrackingControls({
           <>
             <button
               type="button"
-              className={`${baseButtonClass} ${saveButtonClass}`}
+              className={`w-full ${baseButtonClass} ${saveButtonClass}`}
               onClick={onSave}
               disabled={!canSave || isSaving}
             >
@@ -123,7 +116,7 @@ export function DroneTrackingControls({
             </button>
             <button
               type="button"
-              className={`${baseButtonClass} ${clearButtonClass}`}
+              className={`w-full ${baseButtonClass} ${clearButtonClass}`}
               onClick={onClear}
             >
               Clear Route

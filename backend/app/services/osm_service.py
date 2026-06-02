@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import ssl
+import time
+import urllib.parse
 import urllib.request
+from urllib.error import HTTPError, URLError
 from typing import Any
 
 from fastapi import HTTPException
@@ -12,20 +15,111 @@ from . import geometry_service
 
 
 class OsmService:
-    def fetch_osm_full(self, osm_type: OsmType, osm_id: int) -> dict[str, Any]:
-        url = f"https://api.openstreetmap.org/api/0.6/{osm_type}/{osm_id}/full.json"
-        request = urllib.request.Request(
-            url,
-            headers={"User-Agent": "mapping-for-drone-spatial-editor/0.1"},
-        )
+    def __init__(self):
+        self._full_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._enclosing_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._cache_ttl_seconds = 300.0
+
+    def _fetch_json_with_retry(
+        self,
+        *,
+        url: str,
+        data: bytes | None = None,
+        content_type: str | None = None,
+        cache_key: str | None = None,
+        timeout_steps: tuple[int, ...] = (8, 14, 22),
+    ) -> dict[str, Any]:
+        now = time.time()
+        if cache_key:
+            cached = self._full_cache.get(cache_key) or self._enclosing_cache.get(cache_key)
+            if cached and (now - cached[0]) <= self._cache_ttl_seconds:
+                return cached[1]
+
         ctx = ssl._create_unverified_context()
-        try:
-            with urllib.request.urlopen(request, timeout=20, context=ctx) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except Exception as exc:
-            print(f"OSM API request failed URL: {url}")
-            print(f"OSM API request exception: {repr(exc)}")
-            raise HTTPException(status_code=502, detail=f"OSM API request failed: {exc}") from exc
+        last_exception: Exception | None = None
+        for timeout_seconds in timeout_steps:
+            headers = {"User-Agent": "mapping-for-drone-spatial-editor/0.1"}
+            if content_type:
+                headers["Content-Type"] = content_type
+            request = urllib.request.Request(url, data=data, headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=timeout_seconds, context=ctx) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                    if cache_key:
+                        target_cache = self._full_cache if cache_key.startswith(("way:", "relation:")) else self._enclosing_cache
+                        target_cache[cache_key] = (time.time(), payload)
+                    return payload
+            except HTTPError as exc:
+                last_exception = exc
+                if exc.code not in {429, 500, 502, 503, 504}:
+                    break
+            except URLError as exc:
+                last_exception = exc
+            except Exception as exc:
+                last_exception = exc
+            time.sleep(0.25)
+
+        print(f"OSM/Overpass request failed URL: {url}")
+        print(f"OSM/Overpass request exception: {repr(last_exception)}")
+        raise HTTPException(status_code=502, detail=f"OSM/Overpass request failed: {last_exception}") from last_exception
+
+    def fetch_osm_full(self, osm_type: OsmType, osm_id: int) -> dict[str, Any]:
+        cache_key = f"{osm_type}:{osm_id}"
+        url = f"https://api.openstreetmap.org/api/0.6/{osm_type}/{osm_id}/full.json"
+        return self._fetch_json_with_retry(url=url, cache_key=cache_key)
+
+    def fetch_enclosing_elements(self, lat: float, lon: float) -> dict[str, Any]:
+        primary_query = f"""
+[out:json][timeout:10];
+is_in({lat},{lon})->.areas;
+(
+  way(pivot.areas);
+  relation(pivot.areas);
+);
+out tags geom;
+"""
+        fallback_query = f"""
+[out:json][timeout:10];
+(
+  way(around:90,{lat},{lon})[building];
+  way(around:90,{lat},{lon})[landuse];
+  way(around:90,{lat},{lon})[leisure];
+  relation(around:140,{lat},{lon})[boundary=administrative];
+  relation(around:120,{lat},{lon})[type=multipolygon];
+);
+out tags geom;
+"""
+        endpoints = (
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter",
+            "https://overpass.openstreetmap.fr/api/interpreter",
+        )
+        cache_key = f"enclosing:{lat:.6f}:{lon:.6f}"
+        last_error: HTTPException | None = None
+
+        def has_elements(payload: dict[str, Any]) -> bool:
+            elements = payload.get("elements")
+            return isinstance(elements, list) and len(elements) > 0
+
+        for query_index, query in enumerate((primary_query, fallback_query)):
+            for endpoint in endpoints:
+                try:
+                    payload = self._fetch_json_with_retry(
+                        url=endpoint,
+                        data=urllib.parse.urlencode({"data": query}).encode("utf-8"),
+                        content_type="application/x-www-form-urlencoded;charset=UTF-8",
+                        cache_key=cache_key if query_index == 0 else None,
+                        timeout_steps=(7, 10, 14),
+                    )
+                    if has_elements(payload):
+                        return payload
+                except HTTPException as exc:
+                    last_error = exc
+                    continue
+
+        if last_error:
+            raise last_error
+        return {"elements": []}
 
     def get_elements(self, full: dict[str, Any]) -> list[dict[str, Any]]:
         elements = full.get("elements")
@@ -209,4 +303,3 @@ class OsmService:
         print(f"elements_total={len(elements)}")
         print(f"nodes={len(node_elements)} ways={len(way_elements)} relations={len(relation_elements)}")
         print("=========================\n")
-

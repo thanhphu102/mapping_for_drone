@@ -61,15 +61,15 @@ export function EditorToolbox({
     SHAPE_TOOLS.find((tool) => tool.mode === mode)
 
   return (
-    <div className="pointer-events-auto absolute bottom-5 left-1/2 z-40 w-fit max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-2xl border border-slate-300 bg-white/95 p-2 shadow-2xl backdrop-blur">
-      <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-slate-600">
-        <span className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-medium text-slate-700">
+    <div className="pointer-events-auto absolute bottom-5 left-1/2 z-40 w-fit max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+      <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-slate-500">
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 font-medium text-slate-700">
           Tool: {activeTool?.label ?? 'Select'}
         </span>
-        <span className="text-slate-500">Hold Shift: Square/Circle</span>
+        <span className="pr-1 text-slate-400">Draw</span>
       </div>
       <div className="max-w-full overflow-x-auto overflow-y-visible">
-        <div className="flex w-max min-w-full items-center gap-1.5">
+        <div className="flex w-max min-w-full items-center gap-2">
         {PRIMARY_TOOLS.map((tool, index) => {
           const Icon = tool.icon
           const isActive = mode === tool.mode
@@ -79,13 +79,13 @@ export function EditorToolbox({
 
           return (
             <div key={tool.mode} className="flex items-center gap-1.5">
-              {showSeparator ? <span className="mx-0.5 h-7 w-px bg-slate-300" aria-hidden="true" /> : null}
+              {showSeparator ? <span className="mx-0.5 h-7 w-px bg-slate-200" aria-hidden="true" /> : null}
               <button
                 type="button"
-                className={`group relative flex h-10 min-w-10 items-center justify-center rounded-lg border px-2 transition ${
+                className={`group relative flex h-11 min-w-11 items-center justify-center rounded-xl border transition ${
                   isActive
-                    ? 'border-sky-400/80 bg-sky-500 text-white shadow-[0_0_0_1px_rgba(56,189,248,0.3)]'
-                    : 'border-slate-300 bg-white text-slate-800 shadow-sm hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900'
+                    ? 'border-sky-500 bg-sky-500 text-white'
+                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950'
                 } disabled:cursor-not-allowed disabled:opacity-45`}
                 onClick={() => {
                   onSetMode(tool.mode)
@@ -103,7 +103,7 @@ export function EditorToolbox({
             </div>
           )
         })}
-          <span className="mx-0.5 h-7 w-px bg-slate-300" aria-hidden="true" />
+          <span className="mx-0.5 h-7 w-px bg-slate-200" aria-hidden="true" />
           {SHAPE_TOOLS.map((tool) => {
             const Icon = tool.icon
             const isActive = mode === tool.mode
@@ -112,10 +112,10 @@ export function EditorToolbox({
               <button
                 key={tool.mode}
                 type="button"
-                className={`group relative flex h-10 min-w-10 items-center justify-center rounded-lg border px-2 transition ${
+                className={`group relative flex h-11 min-w-11 items-center justify-center rounded-xl border transition ${
                   isActive
-                    ? 'border-sky-400/80 bg-sky-500 text-white shadow-[0_0_0_1px_rgba(56,189,248,0.3)]'
-                    : 'border-slate-300 bg-white text-slate-800 shadow-sm hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900'
+                    ? 'border-sky-500 bg-sky-500 text-white'
+                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950'
                 } disabled:cursor-not-allowed disabled:opacity-45`}
                 onClick={() => {
                   onSetMode(tool.mode)
@@ -135,7 +135,7 @@ export function EditorToolbox({
         </div>
       </div>
       {floorBlocked ? (
-        <div className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-center text-[11px] text-amber-700">
+        <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-700">
           Select a floor before drawing
         </div>
       ) : null}
