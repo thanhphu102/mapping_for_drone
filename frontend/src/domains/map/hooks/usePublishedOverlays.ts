@@ -25,6 +25,11 @@ import {
   removeLayerSafe,
   removeSourceSafe,
 } from './useMapSources'
+import {
+  isNoFlyZoneProject,
+  NFZ_FILL_LAYER_ID,
+  NFZ_LINE_LAYER_ID,
+} from '../noFlyZones'
 
 interface UsePublishedOverlaysOptions {
   map: Map | null
@@ -149,7 +154,7 @@ export function usePublishedOverlays({
           id: PUBLISHED_OVERLAY_FEATURE_FILL_LAYER_ID,
           type: 'fill',
           source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
-          filter: ['==', ['geometry-type'], 'Polygon'],
+          filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['!=', ['get', 'featureType'], 'no_fly_zone']],
           paint: {
             'fill-color': '#a855f7',
             'fill-opacity': 0.24,
@@ -161,9 +166,36 @@ export function usePublishedOverlays({
           id: PUBLISHED_OVERLAY_FEATURE_LINE_LAYER_ID,
           type: 'line',
           source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
+          filter: ['!=', ['get', 'featureType'], 'no_fly_zone'],
           paint: {
             'line-color': '#7e22ce',
             'line-width': 3,
+          },
+        })
+      }
+      // No-fly zones: solid red fill + dashed red outline.
+      if (!map.getLayer(NFZ_FILL_LAYER_ID)) {
+        map.addLayer({
+          id: NFZ_FILL_LAYER_ID,
+          type: 'fill',
+          source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
+          filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['==', ['get', 'featureType'], 'no_fly_zone']],
+          paint: {
+            'fill-color': '#ef4444',
+            'fill-opacity': 0.22,
+          },
+        })
+      }
+      if (!map.getLayer(NFZ_LINE_LAYER_ID)) {
+        map.addLayer({
+          id: NFZ_LINE_LAYER_ID,
+          type: 'line',
+          source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
+          filter: ['==', ['get', 'featureType'], 'no_fly_zone'],
+          paint: {
+            'line-color': '#dc2626',
+            'line-width': 2.5,
+            'line-dasharray': [2, 1.5],
           },
         })
       }
@@ -188,7 +220,9 @@ export function usePublishedOverlays({
       const boundarySource = getSourceSafe(map, PUBLISHED_OVERLAY_BOUNDARY_SOURCE_ID)
       const featureSource = getSourceSafe(map, PUBLISHED_OVERLAY_FEATURE_SOURCE_ID)
       const visibleBoundaryProjects = projects.filter(
-        (project) => zoom >= project.boundaryMinZoom,
+        // No-fly zones render as their own dashed-red polygon, so skip the
+        // generic boundary outline (it would be larger than the zone itself).
+        (project) => zoom >= project.boundaryMinZoom && !isNoFlyZoneProject(project),
       )
       const visibleFeatureProjects = projects.filter((project) => zoom >= project.detailMinZoom)
 
@@ -291,6 +325,8 @@ export function usePublishedOverlays({
       map.off('click', PUBLISHED_OVERLAY_BOUNDARY_FILL_LAYER_ID, handleBoundaryClick)
       map.off('click', PUBLISHED_OVERLAY_BOUNDARY_LINE_LAYER_ID, handleBoundaryClick)
       for (const layerId of [
+        NFZ_LINE_LAYER_ID,
+        NFZ_FILL_LAYER_ID,
         PUBLISHED_OVERLAY_FEATURE_POINT_LAYER_ID,
         PUBLISHED_OVERLAY_FEATURE_LINE_LAYER_ID,
         PUBLISHED_OVERLAY_FEATURE_FILL_LAYER_ID,

@@ -111,48 +111,51 @@ async def create_spatial_project_from_geometry(payload: CreateProjectFromGeometr
     return {"projectId": stored_project["id"], "project": stored_project}
 
 
-@router.post("/api/no-fly-zones")
-async def create_no_fly_zone(payload: CreateNoFlyZoneRequest):
-    geometry = payload.geometry
+def _no_fly_zone_polygon_points(geometry: dict) -> list[list[float]]:
     if not isinstance(geometry, dict) or geometry.get("type") != "Polygon":
         raise HTTPException(status_code=422, detail="geometry must be a GeoJSON Polygon")
-
-    name = (payload.name or "No-Fly Zone").strip() or "No-Fly Zone"
-
     rings = geometry.get("coordinates") or []
     outer = rings[0] if rings else []
-    points = [p for p in outer if isinstance(p, (list, tuple)) and len(p) >= 2]
+    points = [
+        [float(p[0]), float(p[1])]
+        for p in outer
+        if isinstance(p, (list, tuple)) and len(p) >= 2
+    ]
+    # Drop a duplicate closing point for the centroid math.
+    if len(points) >= 2 and points[0] == points[-1]:
+        points = points[:-1]
     if len(points) < 3:
         raise HTTPException(status_code=422, detail="Polygon needs at least 3 points")
+    return points
 
-    # The project boundary must fully contain the zone, so use a padded bbox
-    # rectangle around the drawn polygon as the base geometry.
-    lngs = [float(p[0]) for p in points]
-    lats = [float(p[1]) for p in points]
-    min_lng, max_lng = min(lngs), max(lngs)
-    min_lat, max_lat = min(lats), max(lats)
-    pad_lng = max((max_lng - min_lng) * 0.05, 1e-4)
-    pad_lat = max((max_lat - min_lat) * 0.05, 1e-4)
-    boundary_ring = [
-        [min_lng - pad_lng, min_lat - pad_lat],
-        [max_lng + pad_lng, min_lat - pad_lat],
-        [max_lng + pad_lng, max_lat + pad_lat],
-        [min_lng - pad_lng, max_lat + pad_lat],
-        [min_lng - pad_lng, min_lat - pad_lat],
-    ]
-    boundary = geometry_service.normalize_to_multipolygon_geometry(
-        {"type": "Polygon", "coordinates": [boundary_ring]}
+
+def _inflated_boundary(points: list[list[float]]) -> dict:
+    # The project boundary must strictly contain the zone feature. Inflate the
+    # polygon outward from its centroid by a small factor so the boundary keeps
+    # the same shape (just slightly larger) and every feature vertex sits inside.
+    cx = sum(p[0] for p in points) / len(points)
+    cy = sum(p[1] for p in points) / len(points)
+    ring = [[cx + (p[0] - cx) * 1.02, cy + (p[1] - cy) * 1.02] for p in points]
+    ring.append(ring[0])
+    return geometry_service.normalize_to_multipolygon_geometry(
+        {"type": "Polygon", "coordinates": [ring]}
     )
 
-    project = build_project_payload(
-        name=name,
-        source="manual",
-        geometry=boundary,
-        editor_mode="region",
-        osm_type=None,
-        osm_id=None,
-        osm_tags={},
-    )
+
+def _apply_no_fly_zone_geometry(project: dict, name: str, geometry: dict) -> None:
+    points = _no_fly_zone_polygon_points(geometry)
+    project["name"] = name
+    project["kind"] = "no_fly_zone"
+    project["baseGeometry"] = _inflated_boundary(points)
+    stats = geometry_service.geometry_stats(project["baseGeometry"])
+    project["bbox"] = stats["bbox"]
+    project["areaSquareKm"] = stats["areaSquareKm"]
+    project["areaM2"] = stats["areaM2"]
+    project["perimeterM"] = stats["perimeterM"]
+    # Render/enforce the zone at every overlay zoom, not just close-up.
+    project["boundaryMinZoom"] = 1
+    project["detailMinZoom"] = 1
+    project["features"] = []
     feature = {
         "type": "Feature",
         "id": str(uuid4()),
@@ -160,8 +163,34 @@ async def create_no_fly_zone(payload: CreateNoFlyZoneRequest):
         "geometry": geometry,
         "properties": {"featureType": "no_fly_zone", "name": name, "floorId": None},
     }
+    feature_service.upsert_feature(project, feature)
+
+
+@router.post("/api/no-fly-zones")
+async def create_no_fly_zone(payload: CreateNoFlyZoneRequest):
+    name = (payload.name or "No-Fly Zone").strip() or "No-Fly Zone"
+    project = build_project_payload(
+        name=name,
+        source="manual",
+        geometry=geometry_service.normalize_to_multipolygon_geometry(payload.geometry),
+        editor_mode="region",
+        osm_type=None,
+        osm_id=None,
+        osm_tags={},
+    )
     async with project_lock:
-        feature_service.upsert_feature(project, feature)
+        _apply_no_fly_zone_geometry(project, name, payload.geometry)
+        await project_service.save_project(project, touch=False)
+        published = await project_service.publish_project(project["id"])
+    return {"projectId": published["id"], "project": published}
+
+
+@router.put("/api/no-fly-zones/{project_id}")
+async def update_no_fly_zone(project_id: str, payload: CreateNoFlyZoneRequest):
+    async with project_lock:
+        project = await project_service.get_project_or_404(project_id)
+        name = (payload.name or project.get("name") or "No-Fly Zone").strip() or "No-Fly Zone"
+        _apply_no_fly_zone_geometry(project, name, payload.geometry)
         await project_service.save_project(project, touch=False)
         published = await project_service.publish_project(project["id"])
     return {"projectId": published["id"], "project": published}
