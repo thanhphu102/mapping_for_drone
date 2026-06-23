@@ -4,10 +4,7 @@ import type { FilterSpecification, GeoJSONSource, Map } from 'maplibre-gl'
 import type { DrawingProject, ProjectCanvasConfig } from '../types'
 import type { SnapPreview } from './useSnapEngine'
 import type { EditorBackdropMode } from '../editorBackdropMode'
-import {
-  GOOGLE_HYBRID_LAYER_ID,
-  GOOGLE_STREETS_LAYER_ID,
-} from '../../map/baseMapModes'
+import { OSM_LAYER_ID } from '../../map/baseMapModes'
 
 const boundarySourceId = 'base-boundary'
 const featureSourceId = 'project-features'
@@ -313,18 +310,12 @@ export function useMapRenderer({
 
     const currentZoom = map.getZoom()
     const isPrecision = currentZoom >= projectConfig.precisionZoom
-    const streetsOpacity = backdropMode === 'white'
+    const baseOpacity = backdropMode === 'white'
       ? (isPrecision ? 0.26 : 0.46)
       : (isPrecision ? 0.5 : 0.72)
-    const hybridOpacity = backdropMode === 'white'
-      ? (isPrecision ? 0.22 : 0.42)
-      : (isPrecision ? 0.46 : 0.66)
 
-    if (map.getLayer(GOOGLE_STREETS_LAYER_ID)) {
-      map.setPaintProperty(GOOGLE_STREETS_LAYER_ID, 'raster-opacity', streetsOpacity)
-    }
-    if (map.getLayer(GOOGLE_HYBRID_LAYER_ID)) {
-      map.setPaintProperty(GOOGLE_HYBRID_LAYER_ID, 'raster-opacity', hybridOpacity)
+    if (map.getLayer(OSM_LAYER_ID)) {
+      map.setPaintProperty(OSM_LAYER_ID, 'raster-opacity', baseOpacity)
     }
   }, [backdropMode, map, mapLoaded, mapReady, mapZoom, project, projectConfig.precisionZoom])
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
@@ -12,6 +13,7 @@ from ..dependencies import (
 )
 from ..schemas.project import (
     CreateChildProjectRequest,
+    CreateNoFlyZoneRequest,
     CreateProjectFromGeometryRequest,
     CreateProjectFromOsmRequest,
     ImportGeoJsonProjectRequest,
@@ -107,6 +109,62 @@ async def create_spatial_project_from_geometry(payload: CreateProjectFromGeometr
     async with project_lock:
         stored_project = await project_service.save_project(project, touch=False)
     return {"projectId": stored_project["id"], "project": stored_project}
+
+
+@router.post("/api/no-fly-zones")
+async def create_no_fly_zone(payload: CreateNoFlyZoneRequest):
+    geometry = payload.geometry
+    if not isinstance(geometry, dict) or geometry.get("type") != "Polygon":
+        raise HTTPException(status_code=422, detail="geometry must be a GeoJSON Polygon")
+
+    name = (payload.name or "No-Fly Zone").strip() or "No-Fly Zone"
+
+    rings = geometry.get("coordinates") or []
+    outer = rings[0] if rings else []
+    points = [p for p in outer if isinstance(p, (list, tuple)) and len(p) >= 2]
+    if len(points) < 3:
+        raise HTTPException(status_code=422, detail="Polygon needs at least 3 points")
+
+    # The project boundary must fully contain the zone, so use a padded bbox
+    # rectangle around the drawn polygon as the base geometry.
+    lngs = [float(p[0]) for p in points]
+    lats = [float(p[1]) for p in points]
+    min_lng, max_lng = min(lngs), max(lngs)
+    min_lat, max_lat = min(lats), max(lats)
+    pad_lng = max((max_lng - min_lng) * 0.05, 1e-4)
+    pad_lat = max((max_lat - min_lat) * 0.05, 1e-4)
+    boundary_ring = [
+        [min_lng - pad_lng, min_lat - pad_lat],
+        [max_lng + pad_lng, min_lat - pad_lat],
+        [max_lng + pad_lng, max_lat + pad_lat],
+        [min_lng - pad_lng, max_lat + pad_lat],
+        [min_lng - pad_lng, min_lat - pad_lat],
+    ]
+    boundary = geometry_service.normalize_to_multipolygon_geometry(
+        {"type": "Polygon", "coordinates": [boundary_ring]}
+    )
+
+    project = build_project_payload(
+        name=name,
+        source="manual",
+        geometry=boundary,
+        editor_mode="region",
+        osm_type=None,
+        osm_id=None,
+        osm_tags={},
+    )
+    feature = {
+        "type": "Feature",
+        "id": str(uuid4()),
+        "floorId": None,
+        "geometry": geometry,
+        "properties": {"featureType": "no_fly_zone", "name": name, "floorId": None},
+    }
+    async with project_lock:
+        feature_service.upsert_feature(project, feature)
+        await project_service.save_project(project, touch=False)
+        published = await project_service.publish_project(project["id"])
+    return {"projectId": published["id"], "project": published}
 
 
 @router.post("/api/spatial-projects/import-geojson")

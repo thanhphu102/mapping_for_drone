@@ -40,7 +40,6 @@ import { useImportScanJson } from './hooks/useImportScanJson'
 import { usePublishProject } from './hooks/usePublishProject'
 import { useInspectorFormState } from './hooks/useInspectorFormState'
 import { geometryInsideBoundaryStrict } from './geometry/validation'
-import { GoogleBaseMapPicker } from '../map/components/GoogleBaseMapPicker'
 import { writeStoredMainMapCamera } from '../map/utils/mainMapCamera'
 import {
   readStoredEditorBackdropMode,
@@ -203,8 +202,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     mapReady,
     mapLoaded,
     mapZoom,
-    baseMapMode,
-    setBaseMapMode,
     containerRef,
   } = useMapContext()
   const isMountedRef = useRef(false)
@@ -227,6 +224,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const [pendingUpdatedFeatures, setPendingUpdatedFeatures] = useState<Record<string, Feature>>({})
   const [pendingDeletedFeatureIds, setPendingDeletedFeatureIds] = useState<string[]>([])
   const [userMode, setUserMode] = useState<DrawMode>('select')
+  const [featureTypeOverride, setFeatureTypeOverride] = useState<string | null>(null)
   const [draftPoints, setDraftPoints] = useState<Position[]>([])
   const [hoverCoordinate, setHoverCoordinate] = useState<Position | null>(null)
   const { message, setMessage } = useEditorNotices('Loading project...')
@@ -281,7 +279,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
 
   const mode = useMemo<DrawMode>(() => userMode, [userMode])
 
-  const activeFeatureType = featureTypeForMode(mode)
+  const activeFeatureType = featureTypeOverride ?? featureTypeForMode(mode)
   const currentDraftCollection = draftToFeatures(mode, draftPoints, activeFeatureType, hoverCoordinate, map, boxShapeVariant)
   const toolsEnabled = mapReady
 
@@ -416,12 +414,16 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   }, [map, mode])
 
   // --- Stable callbacks ---
-  const handleSetMode = useCallback((newMode: DrawMode) => {
+  const handleSetMode = useCallback((newMode: DrawMode, featureType: string | null = null) => {
     if (!canDrawOnFloor && !['select', 'move'].includes(newMode)) {
       setMessage('Select a floor before drawing')
       return
     }
     setBoxShapeVariant(null)
+    // The toolbox is the only entry to a drawing mode, so it always passes the
+    // intended feature type here (null for generic tools, 'no_fly_zone' for the
+    // No-Fly Zone tool) — keeping the override in sync without a reset effect.
+    setFeatureTypeOverride(featureType)
     setUserMode(newMode)
   }, [canDrawOnFloor, setMessage])
 
@@ -727,6 +729,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     setName: setInspectorName,
     setTag: setInspectorTag,
     setNoteText: setInspectorNoteText,
+    setFeatureType: setInspectorFeatureType,
   } = useInspectorFormState(selectedFeatures)
 
   const handleMoveFeatures = useCallback((featureIds: string[], deltaLng: number, deltaLat: number) => {
@@ -878,6 +881,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           properties: {
             ...(feature.properties ?? {}),
             ...(selectedFeatures.length === 1 ? { name: inspectorDraft.name } : {}),
+            ...(inspectorDraft.featureType ? { featureType: inspectorDraft.featureType } : {}),
             tag: inspectorDraft.tag,
             noteText: inspectorDraft.noteText,
             floorId: (feature as SpatialFeature).floorId
@@ -897,7 +901,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         setIsSavingInspector(false)
       }
     }
-  }, [applyLocalFeatureUpdate, featureIdForState, inspectorDraft.name, inspectorDraft.noteText, inspectorDraft.tag, selectedFeatures, selectedFloorId, setMessage])
+  }, [applyLocalFeatureUpdate, featureIdForState, inspectorDraft.featureType, inspectorDraft.name, inspectorDraft.noteText, inspectorDraft.tag, selectedFeatures, selectedFloorId, setMessage])
 
   const handlePreviewImport = useCallback(async (polygons: {
     name?: string
@@ -1572,6 +1576,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         ) : null}
         <EditorToolbox
           mode={mode}
+          activeFeatureType={activeFeatureType}
           toolsEnabled={toolsEnabled}
           isSaving={isSaving || publishing}
           floorRequired={Boolean(floorRequired)}
@@ -1621,10 +1626,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           <EditorBackdropPicker
             mode={backdropMode}
             onChange={setBackdropMode}
-          />
-          <GoogleBaseMapPicker
-            mode={baseMapMode}
-            onChange={setBaseMapMode}
           />
         </div>
         {selectedBuildingFeature ? (
@@ -1714,7 +1715,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
                 mapZoom={mapZoom}
                 mapReady={mapReady}
                 boundaryRendered={boundaryRendered}
-                baseMapMode={baseMapMode}
                 backdropMode={backdropMode}
                 visibleFeatures={visibleFeatures}
                 draftFeature={draftCollection}
@@ -1726,7 +1726,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
                 onInspectorNameChange={setInspectorName}
                 onInspectorTagChange={setInspectorTag}
                 onInspectorNoteChange={setInspectorNoteText}
-                onBaseMapModeChange={setBaseMapMode}
+                onInspectorFeatureTypeChange={setInspectorFeatureType}
                 onBackdropModeChange={setBackdropMode}
                 onSaveInspector={handleSaveInspector}
                 isSavingInspector={isSavingInspector}
@@ -1776,7 +1776,6 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               mapZoom={mapZoom}
               mapReady={mapReady}
               boundaryRendered={boundaryRendered}
-              baseMapMode={baseMapMode}
               backdropMode={backdropMode}
               visibleFeatures={visibleFeatures}
               draftFeature={draftCollection}
@@ -1788,7 +1787,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               onInspectorNameChange={setInspectorName}
               onInspectorTagChange={setInspectorTag}
               onInspectorNoteChange={setInspectorNoteText}
-              onBaseMapModeChange={setBaseMapMode}
+              onInspectorFeatureTypeChange={setInspectorFeatureType}
               onBackdropModeChange={setBackdropMode}
               onSaveInspector={handleSaveInspector}
               isSavingInspector={isSavingInspector}

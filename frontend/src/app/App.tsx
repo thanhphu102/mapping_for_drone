@@ -106,6 +106,7 @@ function App() {
       onCancelTarget={commandFlow.handleCancelTarget}
       onConfirmTarget={commandFlow.handleConfirmTarget}
       onTrackingNotice={setNotice}
+      onGeofenceBreach={setNotice}
       onTrackingStateChange={trackingFlow.handleTrackingStateChange}
       onTrackingControllerReady={trackingFlow.handleTrackingControllerReady}
       onHoverCandidate={osmFlow.handleCandidateHover}

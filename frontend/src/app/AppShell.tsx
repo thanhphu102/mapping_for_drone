@@ -65,6 +65,7 @@ interface AppShellProps {
   onCancelTarget: () => void
   onConfirmTarget: () => void
   onTrackingNotice: (notice: NoticeState) => void
+  onGeofenceBreach: (notice: NoticeState) => void
   onTrackingStateChange: (state: TrackingFlowState) => void
   onTrackingControllerReady: (
     controller: {
@@ -139,6 +140,7 @@ export function AppShell({
   onCancelTarget,
   onConfirmTarget,
   onTrackingNotice,
+  onGeofenceBreach,
   onTrackingStateChange,
   onTrackingControllerReady,
   onHoverCandidate,
@@ -310,6 +312,7 @@ export function AppShell({
             onCancelTarget={onCancelTarget}
             onConfirmTarget={onConfirmTarget}
             onTrackingNotice={onTrackingNotice}
+            onGeofenceBreach={onGeofenceBreach}
             selectedTrackingDroneId={selectedTrackingDroneId}
             onTrackingStateChange={onTrackingStateChange}
             onTrackingControllerReady={onTrackingControllerReady}

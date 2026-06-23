@@ -1,52 +1,11 @@
-import type { Map } from 'maplibre-gl'
+// OpenStreetMap base map tile configuration.
+//
+// The backend proxies the public OSM standard tile server at
+// `/api/tiles/osm/{z}/{x}/{y}.png` (see backend/app/routers/tiles.py). OSM
+// standard raster tiles serve up to zoom level 19.
 
-export type GoogleBaseMapMode = 'map' | 'satellite'
-
-export const GOOGLE_RASTER_MAX_ZOOM = 21
-export const GOOGLE_STREETS_SOURCE_ID = 'googleStreets'
-export const GOOGLE_HYBRID_SOURCE_ID = 'googleHybrid'
-export const GOOGLE_STREETS_LAYER_ID = 'google-streets'
-export const GOOGLE_HYBRID_LAYER_ID = 'google-hybrid'
-
-const googleBaseMapStorageKey = 'swarm-gsc-google-base-map-mode'
-
-export function googleRasterTileScale() {
-  if (typeof window === 'undefined') {
-    return 1
-  }
-  return window.devicePixelRatio >= 1.25 ? 2 : 1
-}
-
-export function readStoredGoogleBaseMapMode(): GoogleBaseMapMode {
-  if (typeof window === 'undefined') {
-    return 'map'
-  }
-  return window.localStorage.getItem(googleBaseMapStorageKey) === 'satellite'
-    ? 'satellite'
-    : 'map'
-}
-
-export function writeStoredGoogleBaseMapMode(mode: GoogleBaseMapMode) {
-  window.localStorage.setItem(googleBaseMapStorageKey, mode)
-}
-
-export function setGoogleBaseMapLayerVisibility(
-  map: Map,
-  mode: GoogleBaseMapMode,
-) {
-  if (map.getLayer(GOOGLE_STREETS_LAYER_ID)) {
-    map.setLayoutProperty(
-      GOOGLE_STREETS_LAYER_ID,
-      'visibility',
-      mode === 'map' ? 'visible' : 'none',
-    )
-  }
-
-  if (map.getLayer(GOOGLE_HYBRID_LAYER_ID)) {
-    map.setLayoutProperty(
-      GOOGLE_HYBRID_LAYER_ID,
-      'visibility',
-      mode === 'satellite' ? 'visible' : 'none',
-    )
-  }
-}
+export const OSM_SOURCE_ID = 'osm'
+export const OSM_LAYER_ID = 'osm-tiles'
+export const OSM_RASTER_MAX_ZOOM = 19
+export const OSM_TILE_URL = '/api/tiles/osm/{z}/{x}/{y}.png'
+export const OSM_ATTRIBUTION = '© OpenStreetMap contributors'

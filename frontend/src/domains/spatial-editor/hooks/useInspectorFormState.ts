@@ -5,6 +5,7 @@ export interface InspectorDraft {
   name: string
   tag: string
   noteText: string
+  featureType: string
 }
 
 function featureId(feature: Feature | null): string | null {
@@ -19,6 +20,7 @@ function featureDraft(feature: Feature): InspectorDraft {
     name: String(props.name ?? ''),
     tag: String(props.tag ?? ''),
     noteText: String(props.noteText ?? ''),
+    featureType: String(props.featureType ?? ''),
   }
 }
 
@@ -34,6 +36,7 @@ export function useInspectorFormState(selectedFeatures: Feature[]) {
   const [name, setNameState] = useState('')
   const [tag, setTagState] = useState('')
   const [noteText, setNoteTextState] = useState('')
+  const [featureType, setFeatureTypeState] = useState('')
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -42,6 +45,7 @@ export function useInspectorFormState(selectedFeatures: Feature[]) {
         setNameState('')
         setTagState('')
         setNoteTextState('')
+        setFeatureTypeState('')
         return
       }
       if (lastSyncedFeatureIdRef.current === selectedId) {
@@ -52,6 +56,7 @@ export function useInspectorFormState(selectedFeatures: Feature[]) {
       setNameState(nextDraft.name)
       setTagState(nextDraft.tag)
       setNoteTextState(nextDraft.noteText)
+      setFeatureTypeState(nextDraft.featureType)
     }, 0)
     return () => window.clearTimeout(timer)
   }, [selectedId, singleSelectedFeature])
@@ -68,17 +73,23 @@ export function useInspectorFormState(selectedFeatures: Feature[]) {
     setNoteTextState(noteText)
   }, [])
 
+  const setFeatureType = useCallback((featureType: string) => {
+    setFeatureTypeState(featureType)
+  }, [])
+
   const setDraftValue = useCallback((next: InspectorDraft) => {
     setNameState(next.name)
     setTagState(next.tag)
     setNoteTextState(next.noteText)
+    setFeatureTypeState(next.featureType)
   }, [])
 
   const draft = useMemo<InspectorDraft>(() => ({
     name,
     tag,
     noteText,
-  }), [name, noteText, tag])
+    featureType,
+  }), [name, noteText, tag, featureType])
 
   return {
     draft,
@@ -86,6 +97,7 @@ export function useInspectorFormState(selectedFeatures: Feature[]) {
     setName,
     setTag,
     setNoteText,
+    setFeatureType,
     isMultiSelect,
     hasSelection: Boolean(singleSelectedFeature),
   }
