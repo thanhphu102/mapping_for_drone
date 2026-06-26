@@ -1,4 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import * as Tabs from '@radix-ui/react-tabs'
 import { Info, Save } from 'lucide-react'
 import type { Feature, Position } from 'geojson'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFloor } from '../types'
@@ -80,20 +81,42 @@ export function EditorSidebar({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-        <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">View</h3>
-          <div className="mt-2 space-y-2">
-            <div>
-              <div className="mb-1 text-xs text-slate-500">Backdrop</div>
-              <EditorBackdropPicker mode={backdropMode} onChange={onBackdropModeChange} />
-            </div>
-          </div>
-        </section>
+      <Tabs.Root defaultValue="properties" className="flex min-h-0 flex-1 flex-col">
+        <Tabs.List
+          className="flex shrink-0 gap-1 border-b border-slate-200 px-3 pt-3"
+          aria-label="Inspector sections"
+        >
+          {(['view', 'properties', 'info'] as const).map((value) => (
+            <Tabs.Trigger
+              key={value}
+              value={value}
+              className="rounded-t-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 outline-none transition hover:text-slate-800 focus-visible:ring-2 focus-visible:ring-sky-400 data-[state=active]:border-b-2 data-[state=active]:border-sky-500 data-[state=active]:text-sky-700"
+            >
+              {value}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
 
-        <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Properties</h3>
-          <div className="mt-2 space-y-2">
+        <Tabs.Content
+          value="view"
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 outline-none"
+        >
+          <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="space-y-2">
+              <div>
+                <div className="mb-1 text-xs text-slate-500">Backdrop</div>
+                <EditorBackdropPicker mode={backdropMode} onChange={onBackdropModeChange} />
+              </div>
+            </div>
+          </section>
+        </Tabs.Content>
+
+        <Tabs.Content
+          value="properties"
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 outline-none"
+        >
+          <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="space-y-2">
             <label className="block">
               <span className="mb-1 block text-xs text-slate-500">Name</span>
               <input
@@ -169,35 +192,41 @@ export function EditorSidebar({
             >
               <Save className="size-3.5" /> Save
             </button>
-          </div>
-        </section>
+            </div>
+          </section>
+        </Tabs.Content>
 
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          <div className="flex items-start gap-2">
-            <Info className="mt-0.5 size-4 text-sky-500" />
-            <span>{message}</span>
+        <Tabs.Content
+          value="info"
+          className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 outline-none"
+        >
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <div className="flex items-start gap-2">
+              <Info className="mt-0.5 size-4 text-sky-500" />
+              <span>{message}</span>
+            </div>
           </div>
-        </div>
 
-        <details className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-            Advanced
-          </summary>
-          <div className="mt-3 space-y-1 rounded-lg border border-slate-200 bg-white p-4">
-            <div>Floors enabled: {project?.floorsEnabled ? 'yes' : 'no'}</div>
-            <div>Floor: {activeFloor?.label ?? 'None'}</div>
-            <div>Floors: {floors.length}</div>
-            <div>Objects in view: {visibleFeatures.length}</div>
-            <div>Zoom: {mapZoom.toFixed(1)}</div>
-            <div>Map ready: {mapReady ? 'yes' : 'no'}</div>
-            <div>Boundary ready: {boundaryRendered ? 'yes' : 'no'}</div>
-            <div>Snap: {projectConfig.snapping.enabled ? (snapPreview ? `locked ${snapPreview.kind}` : 'enabled') : 'disabled'}</div>
-            <div className="font-mono text-xs text-slate-500">Cursor: {hoverCoordinate ? `${hoverCoordinate[1].toFixed(6)}, ${hoverCoordinate[0].toFixed(6)}` : '-'}</div>
-            <div className="font-mono text-xs text-slate-500">Local: {hoverLocal ? `X ${hoverLocal.x.toFixed(2)}m · Y ${hoverLocal.y.toFixed(2)}m` : '-'}</div>
-            <div>{featureMeasurement(draftFeature)}</div>
-          </div>
-        </details>
-      </div>
+          <details className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Advanced
+            </summary>
+            <div className="mt-3 space-y-1 rounded-lg border border-slate-200 bg-white p-4">
+              <div>Floors enabled: {project?.floorsEnabled ? 'yes' : 'no'}</div>
+              <div>Floor: {activeFloor?.label ?? 'None'}</div>
+              <div>Floors: {floors.length}</div>
+              <div>Objects in view: {visibleFeatures.length}</div>
+              <div>Zoom: {mapZoom.toFixed(1)}</div>
+              <div>Map ready: {mapReady ? 'yes' : 'no'}</div>
+              <div>Boundary ready: {boundaryRendered ? 'yes' : 'no'}</div>
+              <div>Snap: {projectConfig.snapping.enabled ? (snapPreview ? `locked ${snapPreview.kind}` : 'enabled') : 'disabled'}</div>
+              <div className="font-mono text-xs text-slate-500">Cursor: {hoverCoordinate ? `${hoverCoordinate[1].toFixed(6)}, ${hoverCoordinate[0].toFixed(6)}` : '-'}</div>
+              <div className="font-mono text-xs text-slate-500">Local: {hoverLocal ? `X ${hoverLocal.x.toFixed(2)}m · Y ${hoverLocal.y.toFixed(2)}m` : '-'}</div>
+              <div>{featureMeasurement(draftFeature)}</div>
+            </div>
+          </details>
+        </Tabs.Content>
+      </Tabs.Root>
     </aside>
   )
 }
