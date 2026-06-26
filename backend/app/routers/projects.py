@@ -23,9 +23,6 @@ from ..services import geometry_service
 from ..services.project_service import (
     build_project_payload,
     classify_enclosing_space,
-    derive_city_calibration,
-    rotate_multipolygon_geometry,
-    translate_multipolygon_geometry,
     validate_editor_mode,
 )
 
@@ -36,24 +33,6 @@ router = APIRouter()
 async def create_drawing_project_from_osm(payload: CreateProjectFromOsmRequest):
     full = osm_service.fetch_osm_full(payload.osmType, payload.osmId)
     geometry, tags = osm_service.osm_to_geometry(full, payload.osmType, payload.osmId)
-    city_key, _city_label = derive_city_calibration(tags)
-    calibration_offset_lon = float(payload.calibrationOffsetLon)
-    calibration_offset_lat = float(payload.calibrationOffsetLat)
-    calibration_rotation_deg = float(payload.calibrationRotationDeg)
-    if payload.calibrationCityKey and payload.calibrationCityKey.strip():
-        city_key = payload.calibrationCityKey.strip()
-    if calibration_offset_lon == 0 and calibration_offset_lat == 0 and city_key:
-        saved = await project_service.get_osm_city_calibration(city_key)
-        if isinstance(saved, dict):
-            calibration_offset_lon = float(saved.get("offsetLon", 0.0))
-            calibration_offset_lat = float(saved.get("offsetLat", 0.0))
-            calibration_rotation_deg = float(saved.get("rotationDeg", 0.0))
-    geometry = translate_multipolygon_geometry(
-        geometry,
-        calibration_offset_lon,
-        calibration_offset_lat,
-    )
-    geometry = rotate_multipolygon_geometry(geometry, calibration_rotation_deg)
     stats = geometry_service.geometry_stats(geometry)
     classification = classify_enclosing_space(tags, stats, "openstreetmap")
     if classification["requiresConfirmation"] and not payload.confirmedLargeArea:

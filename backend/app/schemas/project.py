@@ -18,22 +18,8 @@ ProjectStatus = Literal["draft", "published", "archived"]
 class CreateProjectFromOsmRequest(BaseModel):
     osmType: OsmType
     osmId: int
-    calibrationCityKey: str | None = None
     editorModeOverride: EditorMode | None = None
     confirmedLargeArea: bool = False
-    calibrationOffsetLon: float = 0.0
-    calibrationOffsetLat: float = 0.0
-    calibrationRotationDeg: float = 0.0
-
-
-class SaveOsmCityCalibrationRequest(BaseModel):
-    cityKey: str
-    cityLabel: str | None = None
-    offsetLon: float
-    offsetLat: float
-    rotationDeg: float = 0.0
-    sourceOsmType: OsmType | None = None
-    sourceOsmId: int | None = None
 
 
 class CreateProjectFromGeometryRequest(BaseModel):

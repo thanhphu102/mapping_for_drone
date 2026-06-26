@@ -117,8 +117,6 @@ class JsonProjectRepository:
 
             if "projects" not in data or not isinstance(data["projects"], list):
                 data["projects"] = []
-            if "osmCityCalibrations" not in data or not isinstance(data["osmCityCalibrations"], dict):
-                data["osmCityCalibrations"] = {}
 
             modified = False
             for project in data["projects"]:
@@ -269,23 +267,3 @@ class JsonProjectRepository:
             await self.save_document(document)
 
         return deleted
-
-    async def get_osm_city_calibration(self, city_key: str) -> dict[str, Any] | None:
-        document = await self.load_document()
-        calibrations = document.get("osmCityCalibrations")
-        if not isinstance(calibrations, dict):
-            return None
-        calibration = calibrations.get(city_key)
-        if not isinstance(calibration, dict):
-            return None
-        return calibration
-
-    async def upsert_osm_city_calibration(self, city_key: str, calibration: dict[str, Any]) -> dict[str, Any]:
-        document = await self.load_document()
-        calibrations = document.get("osmCityCalibrations")
-        if not isinstance(calibrations, dict):
-            calibrations = {}
-            document["osmCityCalibrations"] = calibrations
-        calibrations[city_key] = calibration
-        await self.save_document(document)
-        return calibration
