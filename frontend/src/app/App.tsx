@@ -7,6 +7,7 @@ import { useOsmSelectionFlow } from '../domains/osm/hooks/useOsmSelectionFlow'
 import { useTrackingFlow } from '../domains/tracking/hooks/useTrackingFlow'
 import type { DroneState } from '../domains/drone/types'
 import type { NoticeState } from '../shared/components/Notice'
+import { ErrorBoundary } from '../shared/components/ErrorBoundary'
 
 const SpatialEditorPage = lazy(
   () => import('../domains/spatial-editor/SpatialEditorPage'),
@@ -62,12 +63,14 @@ function App() {
 
   if (spatialEditorProjectId) {
     return (
-      <Suspense fallback={<div className="p-4">Loading spatial editor...</div>}>
-        <SpatialEditorPage
-          projectId={spatialEditorProjectId}
-          onBack={openRootRoute}
-        />
-      </Suspense>
+      <ErrorBoundary label="the spatial editor">
+        <Suspense fallback={<div className="p-4">Loading spatial editor...</div>}>
+          <SpatialEditorPage
+            projectId={spatialEditorProjectId}
+            onBack={openRootRoute}
+          />
+        </Suspense>
+      </ErrorBoundary>
     )
   }
 
