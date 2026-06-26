@@ -26,7 +26,6 @@ export function projectsToBoundaryCollection(
       properties: {
         projectId: project.id,
         name: project.name,
-        editorMode: project.editorMode,
       },
     })),
   }
@@ -69,7 +68,6 @@ export function projectsToFeatureCollection(
             ...(feature.properties ?? {}),
             projectId: project.id,
             projectName: project.name,
-            editorMode: project.editorMode,
           },
         })),
     ) as Feature<Geometry>[],

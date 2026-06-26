@@ -226,6 +226,17 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
       mapInstance.resize()
     }
 
+    // The window 'resize' event does not fire when only the map container
+    // changes size (e.g. a resizable sidebar growing/shrinking). Observe the
+    // container directly so the canvas always matches its box.
+    let containerResizeObserver: ResizeObserver | null = null
+    if (containerRef.current && typeof ResizeObserver !== 'undefined') {
+      containerResizeObserver = new ResizeObserver(() => {
+        mapInstance.resize()
+      })
+      containerResizeObserver.observe(containerRef.current)
+    }
+
     const canvas = mapInstance.getCanvas()
 
     const handleWebGlContextLost = (event: Event) => {
@@ -305,6 +316,7 @@ export function useBaseMap(onTargetSelect: (target: MapTargetDraft) => void) {
       mapInstance.off('rotateend', persistCamera)
       mapInstance.off('pitchend', persistCamera)
       window.removeEventListener('resize', handleResize)
+      containerResizeObserver?.disconnect()
       window.removeEventListener('drone:flush-main-map-camera', handleCameraFlushRequest)
       canvas.removeEventListener('webglcontextlost', handleWebGlContextLost)
       canvas.removeEventListener('webglcontextrestored', handleWebGlContextRestored)

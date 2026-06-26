@@ -61,14 +61,6 @@ interface DroneMapProps {
   commandStatus: CommandDispatchStatus
   highlightedCandidate: OsmCandidate | null
   selectedBoundaryGeometry: Geometry | null
-  calibrationDragEnabled?: boolean
-  onCalibrationDragDelta?: (deltaLon: number, deltaLat: number) => void
-  onCalibrationRotateDelta?: (deltaDeg: number) => void
-  previewCalibration?: {
-    offsetLon: number
-    offsetLat: number
-    rotationDeg: number
-  } | null
   isFetchingCandidates: boolean
   isFetchingFull: boolean
   locationFetchMessage: { tone: 'success' | 'error' | 'info'; text: string } | null
@@ -105,10 +97,6 @@ export function DroneMap({
   commandStatus,
   highlightedCandidate,
   selectedBoundaryGeometry,
-  calibrationDragEnabled = false,
-  onCalibrationDragDelta,
-  onCalibrationRotateDelta,
-  previewCalibration = null,
   isFetchingCandidates,
   isFetchingFull,
   locationFetchMessage,
@@ -608,10 +596,6 @@ export function DroneMap({
     map,
     highlightedCandidate,
     selectedBoundaryGeometry,
-    calibrationDragEnabled,
-    onCalibrationDragDelta,
-    onCalibrationRotateDelta,
-    previewCalibration,
   })
 
   useEffect(() => {
@@ -707,14 +691,78 @@ export function DroneMap({
           ) : null}
         </div>
       </div>
-      <button
-        type="button"
-        className="absolute left-4 top-24 z-20 inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 focus:outline-none focus:ring-2 focus:ring-sky-500 sm:left-auto sm:right-4 sm:top-4"
-        onClick={handleFocusVietnam}
-      >
-        <Navigation className="size-3.5" aria-hidden="true" />
-        Reset view
-      </button>
+      {/* Left dock: stacked top-left controls share one column with a
+          consistent offset below the search bar, so they never collide. */}
+      <div className="pointer-events-none absolute left-4 top-20 z-20 flex w-72 max-w-[calc(100%-2rem)] flex-col gap-2">
+        <button
+          type="button"
+          className="pointer-events-auto inline-flex items-center gap-2 self-start rounded-lg border border-white/20 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-900 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+          onClick={handleFocusVietnam}
+        >
+          <Navigation className="size-3.5" aria-hidden="true" />
+          Reset view
+        </button>
+        {overlayZoom >= PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM && nearestOverlayProjects.length > 0 ? (
+          <div className="pointer-events-auto w-full rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
+            <div className="mb-2 font-semibold text-slate-900">Saved maps nearby</div>
+            <div className="max-h-36 space-y-1 overflow-y-auto border-b border-slate-200 pb-2">
+              {nearestOverlayProjects.map((project) => {
+                const active = project.id === selectedOverlayProjectId
+                return (
+                  <button
+                    key={project.id}
+                    type="button"
+                    className={`w-full rounded border px-2 py-1 text-left ${
+                      active
+                        ? 'border-sky-300 bg-sky-50 text-sky-900'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+                    }`}
+                    onClick={() => {
+                      setSelectedOverlayProjectId(project.id)
+                      setSelectedOverlayFloorId(project.floors[0]?.id ?? null)
+                    }}
+                  >
+                    {project.name}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="mt-2 text-[11px] text-slate-500">
+              {selectedOverlayProject ? selectedOverlayProject.name : 'Select a map'}
+            </div>
+            {selectedOverlayProject ? (
+              <button
+                type="button"
+                className="mt-1 w-full rounded border border-rose-300 bg-rose-50 px-2 py-1 text-left text-[11px] text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                onClick={handleDeleteOverlayProject}
+                disabled={isDeletingOverlayProject}
+              >
+                {isDeletingOverlayProject ? 'Deleting...' : 'Delete map'}
+              </button>
+            ) : null}
+            <div className="mt-1 max-h-44 space-y-1 overflow-y-auto">
+              {selectedOverlayProject && overlayFloors.length > 0 ? (
+                overlayFloors.map((floor) => (
+                  <button
+                    key={floor.id}
+                    type="button"
+                    className={`w-full rounded border px-2 py-1 text-left ${
+                      selectedOverlayFloorId === floor.id
+                        ? 'border-sky-300 bg-sky-50 text-sky-900'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+                    }`}
+                    onClick={() => setSelectedOverlayFloorId(floor.id)}
+                  >
+                    {floor.label}
+                  </button>
+                ))
+              ) : (
+                <div className="rounded border border-slate-200 px-2 py-1 text-slate-500">No floor selected</div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
       <div className="absolute bottom-4 left-4 z-20">
         {isDrawingZone ? (
           <div className="flex flex-col gap-2 rounded-lg border border-rose-200 bg-white/95 p-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur">
@@ -802,66 +850,6 @@ export function DroneMap({
           </div>
         )}
       </div>
-      {overlayZoom >= PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM && nearestOverlayProjects.length > 0 ? (
-        <div className="absolute left-4 top-16 z-20 w-72 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
-          <div className="mb-2 font-semibold text-slate-900">Saved maps nearby</div>
-          <div className="max-h-36 space-y-1 overflow-y-auto border-b border-slate-200 pb-2">
-            {nearestOverlayProjects.map((project) => {
-              const active = project.id === selectedOverlayProjectId
-              return (
-                <button
-                  key={project.id}
-                  type="button"
-                  className={`w-full rounded border px-2 py-1 text-left ${
-                    active
-                      ? 'border-sky-300 bg-sky-50 text-sky-900'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900'
-                  }`}
-                  onClick={() => {
-                    setSelectedOverlayProjectId(project.id)
-                    setSelectedOverlayFloorId(project.floors[0]?.id ?? null)
-                  }}
-                >
-                  {project.name}
-                </button>
-              )
-            })}
-          </div>
-          <div className="mt-2 text-[11px] text-slate-500">
-            {selectedOverlayProject ? selectedOverlayProject.name : 'Select a map'}
-          </div>
-          {selectedOverlayProject ? (
-            <button
-              type="button"
-              className="mt-1 w-full rounded border border-rose-300 bg-rose-50 px-2 py-1 text-left text-[11px] text-rose-700 hover:bg-rose-100 disabled:opacity-50"
-              onClick={handleDeleteOverlayProject}
-              disabled={isDeletingOverlayProject}
-            >
-              {isDeletingOverlayProject ? 'Deleting...' : 'Delete map'}
-            </button>
-          ) : null}
-          <div className="mt-1 max-h-44 space-y-1 overflow-y-auto">
-            {selectedOverlayProject && overlayFloors.length > 0 ? (
-              overlayFloors.map((floor) => (
-                <button
-                  key={floor.id}
-                  type="button"
-                  className={`w-full rounded border px-2 py-1 text-left ${
-                    selectedOverlayFloorId === floor.id
-                      ? 'border-sky-300 bg-sky-50 text-sky-900'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900'
-                  }`}
-                  onClick={() => setSelectedOverlayFloorId(floor.id)}
-                >
-                  {floor.label}
-                </button>
-              ))
-            ) : (
-              <div className="rounded border border-slate-200 px-2 py-1 text-slate-500">No floor selected</div>
-            )}
-          </div>
-        </div>
-      ) : null}
       {selectedTarget && tracking.status !== 'tracking' && !hideTargetPopover ? (
         <TargetCommandPopover
           target={selectedTarget}

@@ -1,11 +1,12 @@
 import { ChevronLeft, ChevronRight, MapPinned, PanelRightClose, PanelRightOpen } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import type { ImperativePanelHandle } from 'react-resizable-panels'
 import { DroneMap } from '../domains/map/components/DroneMap'
-import { DroneTable } from '../domains/drone/components/DroneTable'
-import { DroneTrackingControls } from '../domains/tracking/components/DroneTrackingControls'
 import { Notice, type NoticeState } from '../shared/components/Notice'
 import { OsmEnclosingPanel } from '../domains/osm/components/OsmEnclosingPanel'
-import { StatusStrip } from '../domains/drone/components/StatusStrip'
+import { DroneControlPanel } from './components/DroneControlPanel'
+import { useMediaQuery } from '../shared/hooks/useMediaQuery'
 import type { LocationFetchState, SidebarMode } from '../domains/osm/hooks/useOsmSelectionFlow'
 import type { TrackingFlowState } from '../domains/tracking/hooks/useTrackingFlow'
 import type {
@@ -21,7 +22,6 @@ import type {
   OsmElementGeometryResponse,
 } from '../domains/osm/types'
 import type { Geometry } from 'geojson'
-import type { EditorMode } from '../domains/spatial-editor/types'
 import type { SaveTrackedRouteResponse } from '../domains/tracking/types'
 
 interface AppShellProps {
@@ -38,25 +38,9 @@ interface AppShellProps {
   sidebarMode: SidebarMode
   locationFetch: LocationFetchState
   locationSelectionMessage: string | null
-  editorModeOverride: EditorMode | null
   isOpeningEditor: boolean
   confirmedLargeArea: boolean
   selectedBoundaryGeometry: Geometry | null
-  calibration: {
-    cityKey: string | null
-    cityLabel: string | null
-    offsetLon: number
-    offsetLat: number
-    rotationDeg: number
-    isDirty: boolean
-  }
-  previewCalibration: {
-    offsetLon: number
-    offsetLat: number
-    rotationDeg: number
-  } | null
-  calibrationDragEnabled: boolean
-  isSavingCalibration: boolean
   selectedTrackingDroneId: string | null
   trackingState: TrackingFlowState
   notice: NoticeState | null
@@ -77,13 +61,6 @@ interface AppShellProps {
   ) => void
   onHoverCandidate: (candidate: OsmCandidate | null) => void
   onSelectCandidate: (candidate: OsmCandidate) => void
-  onChangeEditorMode: (mode: EditorMode | null) => void
-  onCalibrationOffsetChange: (field: 'offsetLon' | 'offsetLat' | 'rotationDeg', value: number) => void
-  onCalibrationNudge: (deltaLon: number, deltaLat: number) => void
-  onCalibrationRotateNudge: (deltaDeg: number) => void
-  onResetCalibration: () => void
-  onSaveCalibrationForCity: () => void
-  onToggleCalibrationDrag: () => void
   onOpenSpatialEditor: () => void
   onCloseOsmPanel: () => void
   onSelectTrackingDrone: (droneId: string) => void
@@ -92,22 +69,6 @@ interface AppShellProps {
   onSaveTrackingRoute: () => void
   onClearTracking: () => void
   onDismissNotice: () => void
-}
-
-function commandStatusLabel(status: CommandDispatchStatus) {
-  if (status === 'sending') {
-    return 'Sending'
-  }
-
-  if (status === 'success') {
-    return 'Sent'
-  }
-
-  if (status === 'error') {
-    return 'Error'
-  }
-
-  return 'Ready'
 }
 
 export function AppShell({
@@ -124,14 +85,9 @@ export function AppShell({
   sidebarMode,
   locationFetch,
   locationSelectionMessage,
-  editorModeOverride,
   isOpeningEditor,
   confirmedLargeArea,
   selectedBoundaryGeometry,
-  calibration,
-  previewCalibration,
-  calibrationDragEnabled,
-  isSavingCalibration,
   selectedTrackingDroneId,
   trackingState,
   notice,
@@ -145,13 +101,6 @@ export function AppShell({
   onTrackingControllerReady,
   onHoverCandidate,
   onSelectCandidate,
-  onChangeEditorMode,
-  onCalibrationOffsetChange,
-  onCalibrationNudge,
-  onCalibrationRotateNudge,
-  onResetCalibration,
-  onSaveCalibrationForCity,
-  onToggleCalibrationDrag,
   onOpenSpatialEditor,
   onCloseOsmPanel,
   onSelectTrackingDrone,
@@ -163,9 +112,30 @@ export function AppShell({
 }: AppShellProps) {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false)
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const sidebarPanelRef = useRef<ImperativePanelHandle>(null)
 
-  const isDesktopCollapsed = sidebarMode === 'osmEnclosing' ? false : desktopSidebarCollapsed
   const isMobileDrawerOpen = sidebarMode === 'osmEnclosing' ? true : mobileSidebarOpen
+
+  // The OSM enclosing flow always needs the sidebar visible; force-expand it
+  // whenever that mode becomes active.
+  useEffect(() => {
+    if (sidebarMode === 'osmEnclosing') {
+      sidebarPanelRef.current?.expand()
+    }
+  }, [sidebarMode])
+
+  const toggleDesktopSidebar = () => {
+    const panel = sidebarPanelRef.current
+    if (!panel) {
+      return
+    }
+    if (panel.isCollapsed()) {
+      panel.expand()
+    } else {
+      panel.collapse()
+    }
+  }
 
   const sidebarContent = sidebarMode === 'osmEnclosing' ? (
     <OsmEnclosingPanel
@@ -174,20 +144,11 @@ export function AppShell({
       selectedCandidate={locationFetch.selectedCandidate}
       highlightedCandidate={locationFetch.highlightedCandidate}
       selectedGeometry={locationFetch.selectedGeometry as OsmElementGeometryResponse | null}
-      selectedEditorMode={editorModeOverride}
       status={locationFetch.message}
       isOpeningEditor={isOpeningEditor}
       confirmedLargeArea={confirmedLargeArea}
-      calibration={calibration}
-      calibrationDragEnabled={calibrationDragEnabled}
-      isSavingCalibration={isSavingCalibration}
       onHoverCandidate={onHoverCandidate}
       onSelectCandidate={onSelectCandidate}
-      onChangeEditorMode={onChangeEditorMode}
-      onCalibrationOffsetChange={onCalibrationOffsetChange}
-      onResetCalibration={onResetCalibration}
-      onSaveCalibrationForCity={onSaveCalibrationForCity}
-      onToggleCalibrationDrag={onToggleCalibrationDrag}
       onOpenSpatialEditor={onOpenSpatialEditor}
       onClose={onCloseOsmPanel}
     />
@@ -210,143 +171,102 @@ export function AppShell({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <StatusStrip
-          connectionStatus={connectionStatus}
-          connectionMessage={connectionMessage}
-          connectedCount={connectedCount}
-          averageBattery={averageBattery}
-          commandStatus={commandStatus}
-        />
-
-        <section aria-labelledby="drone-table-heading">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2
-                id="drone-table-heading"
-                className="text-sm font-semibold text-slate-950"
-              >
-                Drones
-              </h2>
-              <p className="text-sm text-slate-500">
-                Select a drone to track or review.
-              </p>
-            </div>
-            <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-              Live
-            </span>
-          </div>
-
-          <DroneTable
-            drones={connectedDrones}
-            isTelemetryOpen={connectionStatus === 'open'}
-            selectedTrackingDroneId={selectedTrackingDroneId}
-            onSelectTrackingDrone={onSelectTrackingDrone}
-          />
-        </section>
-
-        <DroneTrackingControls
-          selectedDroneId={selectedTrackingDroneId}
-          status={trackingState.status}
-          pointsCount={trackingState.pointsCount}
-          maxPoints={trackingState.maxPoints}
-          canSave={trackingState.canSave}
-          isSaving={trackingState.isSaving}
-          onStart={onStartTracking}
-          onStop={onStopTracking}
-          onSave={onSaveTrackingRoute}
-          onClear={onClearTracking}
-        />
-
-        <details className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">
-            Status details
-          </summary>
-          <section
-            className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3"
-            aria-live="polite"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-slate-950">
-                Command
-              </h2>
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold capitalize text-slate-600">
-                {commandStatusLabel(commandStatus)}
-              </span>
-            </div>
-            <p className="mt-2 text-sm text-slate-600">
-              {commandMessage}
-            </p>
-            {locationSelectionMessage ? (
-              <p className="mt-2 text-sm font-medium text-emerald-700">
-                {locationSelectionMessage}
-              </p>
-            ) : null}
-          </section>
-        </details>
-      </div>
+      <DroneControlPanel
+        connectedDrones={connectedDrones}
+        connectedCount={connectedCount}
+        averageBattery={averageBattery}
+        connectionStatus={connectionStatus}
+        connectionMessage={connectionMessage}
+        commandStatus={commandStatus}
+        commandMessage={commandMessage}
+        locationSelectionMessage={locationSelectionMessage}
+        selectedTrackingDroneId={selectedTrackingDroneId}
+        trackingState={trackingState}
+        onSelectTrackingDrone={onSelectTrackingDrone}
+        onStartTracking={onStartTracking}
+        onStopTracking={onStopTracking}
+        onSaveTrackingRoute={onSaveTrackingRoute}
+        onClearTracking={onClearTracking}
+      />
     </>
+  )
+
+  const droneMap = (
+    <DroneMap
+      dronesById={dronesById}
+      dirtyIds={dirtyIds}
+      selectedTarget={selectedTarget}
+      connectedCount={connectedCount}
+      commandStatus={commandStatus}
+      highlightedCandidate={locationFetch.highlightedCandidate}
+      selectedBoundaryGeometry={selectedBoundaryGeometry}
+      isFetchingCandidates={locationFetch.status === 'loading_candidates'}
+      isFetchingFull={locationFetch.status === 'loading_full'}
+      locationFetchMessage={locationFetch.message}
+      onTargetSelect={onTargetSelect}
+      onFetchLocation={onFetchLocation}
+      onCancelTarget={onCancelTarget}
+      onConfirmTarget={onConfirmTarget}
+      onTrackingNotice={onTrackingNotice}
+      onGeofenceBreach={onGeofenceBreach}
+      selectedTrackingDroneId={selectedTrackingDroneId}
+      onTrackingStateChange={onTrackingStateChange}
+      onTrackingControllerReady={onTrackingControllerReady}
+      hideTargetPopover={sidebarMode === 'osmEnclosing'}
+    />
   )
 
   return (
     <div className="min-h-screen h-dvh bg-slate-100 text-slate-950">
-      <div className="flex h-full flex-col lg:flex-row">
-        <main className="relative min-h-0 flex-1">
-          <DroneMap
-            dronesById={dronesById}
-            dirtyIds={dirtyIds}
-            selectedTarget={selectedTarget}
-            connectedCount={connectedCount}
-            commandStatus={commandStatus}
-            highlightedCandidate={locationFetch.highlightedCandidate}
-            selectedBoundaryGeometry={selectedBoundaryGeometry}
-            calibrationDragEnabled={calibrationDragEnabled}
-            onCalibrationDragDelta={onCalibrationNudge}
-            onCalibrationRotateDelta={onCalibrationRotateNudge}
-            previewCalibration={previewCalibration}
-            isFetchingCandidates={locationFetch.status === 'loading_candidates'}
-            isFetchingFull={locationFetch.status === 'loading_full'}
-            locationFetchMessage={locationFetch.message}
-            onTargetSelect={onTargetSelect}
-            onFetchLocation={onFetchLocation}
-            onCancelTarget={onCancelTarget}
-            onConfirmTarget={onConfirmTarget}
-            onTrackingNotice={onTrackingNotice}
-            onGeofenceBreach={onGeofenceBreach}
-            selectedTrackingDroneId={selectedTrackingDroneId}
-            onTrackingStateChange={onTrackingStateChange}
-            onTrackingControllerReady={onTrackingControllerReady}
-            disableTargetSelect={calibrationDragEnabled}
-            hideTargetPopover={sidebarMode === 'osmEnclosing'}
-          />
-          <button
-            type="button"
-            className="absolute right-4 top-4 z-30 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-lg lg:hidden"
-            onClick={() => setMobileSidebarOpen(true)}
-          >
-            <PanelRightOpen className="size-3.5" />
-            Panel
-          </button>
-        </main>
+      <PanelGroup
+        direction="horizontal"
+        autoSaveId="appshell-main-sidebar"
+        className="h-full"
+      >
+        <Panel id="map" order={1} minSize={30} className="relative min-h-0">
+          <main className="relative h-full w-full">
+            {droneMap}
+            <button
+              type="button"
+              className="absolute right-4 top-4 z-30 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-lg lg:hidden"
+              onClick={() => setMobileSidebarOpen(true)}
+            >
+              <PanelRightOpen className="size-3.5" />
+              Panel
+            </button>
+          </main>
+        </Panel>
 
-        <aside
-          className={`relative hidden border-l border-slate-200 bg-slate-50 transition-[width] duration-200 ease-out lg:block ${
-            isDesktopCollapsed ? 'w-[22px]' : 'w-[380px] xl:w-[400px]'
-          }`}
-        >
-          <button
-            type="button"
-            className="absolute left-0 top-1/2 z-20 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
-            onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-            aria-label={isDesktopCollapsed ? 'Open panel' : 'Collapse panel'}
-          >
-            {isDesktopCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-          </button>
-          {isDesktopCollapsed ? null : (
-            <div className="h-full overflow-hidden">{sidebarContent}</div>
-          )}
-        </aside>
-      </div>
+        {isDesktop ? (
+          <>
+            <PanelResizeHandle className="relative hidden w-1.5 bg-slate-200 outline-none transition-colors data-[resize-handle-state=drag]:bg-sky-400 data-[resize-handle-state=hover]:bg-sky-300 lg:block">
+              <button
+                type="button"
+                className="absolute left-0 top-1/2 z-20 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
+                onClick={toggleDesktopSidebar}
+                aria-label={desktopSidebarCollapsed ? 'Open panel' : 'Collapse panel'}
+              >
+                {desktopSidebarCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              </button>
+            </PanelResizeHandle>
+            <Panel
+              id="sidebar"
+              order={2}
+              ref={sidebarPanelRef}
+              collapsible
+              collapsedSize={0}
+              defaultSize={26}
+              minSize={18}
+              maxSize={42}
+              onCollapse={() => setDesktopSidebarCollapsed(true)}
+              onExpand={() => setDesktopSidebarCollapsed(false)}
+              className="hidden border-l border-slate-200 bg-slate-50 lg:block"
+            >
+              <div className="h-full overflow-hidden">{sidebarContent}</div>
+            </Panel>
+          </>
+        ) : null}
+      </PanelGroup>
 
       {isMobileDrawerOpen ? (
         <div className="fixed inset-0 z-40 bg-slate-900/35 lg:hidden" onClick={() => setMobileSidebarOpen(false)}>

@@ -2,17 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, Geometry, MultiPolygon, Position } from 'geojson'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import type { ImperativePanelHandle } from 'react-resizable-panels'
+import * as Dialog from '@radix-ui/react-dialog'
+import { useMediaQuery } from '../../shared/hooks/useMediaQuery'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFeature } from './types'
 import {
   createChildProject,
   fetchDrawingProject,
+  setFloorsEnabled,
 } from './services/projects'
 import {
   deleteDrawingFeature,
   fetchProjectVisibleFeatures,
   saveDrawingFeature,
 } from './services/features'
-import { createProjectFloor } from './services/floors'
 import { MapProvider, useMapContext } from './components/MapProvider'
 import { EditorToolbar } from './components/EditorToolbar'
 import { EditorToolbox } from './components/EditorToolbox'
@@ -236,9 +240,20 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     readStoredEditorBackdropMode,
   )
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
-  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(true)
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
   const [mobileStructureOpen, setMobileStructureOpen] = useState(false)
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
+  const isDesktopLayout = useMediaQuery('(min-width: 1024px)')
+  const structurePanelRef = useRef<ImperativePanelHandle>(null)
+  const inspectorPanelRef = useRef<ImperativePanelHandle>(null)
+  const togglePanelCollapse = useCallback((panel: ImperativePanelHandle | null) => {
+    if (!panel) return
+    if (panel.isCollapsed()) {
+      panel.expand()
+    } else {
+      panel.collapse()
+    }
+  }, [])
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<string[]>([])
   const [tagFilter, setTagFilter] = useState('')
   const [importPreviewFeatures, setImportPreviewFeatures] = useState<Feature[]>([])
@@ -322,9 +337,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   })
 
   const hasFloors = floors.length > 0
-  const floorRequired = project?.editorMode === 'building' || project?.editorMode === 'indoor'
-  const canShowFloorSelector = Boolean(floorRequired || hasFloors)
-  const canDrawOnFloor = !floorRequired || Boolean(selectedFloorId)
+  const floorsEnabled = Boolean(project?.floorsEnabled)
+  const canShowFloorSelector = Boolean(floorsEnabled || hasFloors)
+  const canDrawOnFloor = !floorsEnabled || Boolean(selectedFloorId)
 
   const visibleFeatures = useMemo(() => {
     const deleted = new Set(pendingDeletedFeatureIds)
@@ -865,7 +880,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const selectedBuildingFeature = useMemo(() => {
     if (!project || selectedFeatures.length !== 1) return null
     const target = selectedFeatures[0]
-    return project.editorMode === 'campus' && target.geometry.type === 'Polygon' ? target : null
+    return target.geometry.type === 'Polygon' ? target : null
   }, [project, selectedFeatures])
 
   const handleSaveInspector = useCallback(async () => {
@@ -1223,42 +1238,18 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         if (!isMountedRef.current || abortController.signal.aborted) {
           return
         }
-        let loadedProject = nextProject
-        const shouldCreateDefaultFloor =
-          (nextProject.editorMode === 'building' || nextProject.editorMode === 'indoor') &&
-          nextProject.floors.length === 0
-        if (shouldCreateDefaultFloor) {
-          setMessage('Creating default floor...')
-          try {
-            const floorResponse = await createProjectFloor(nextProject.id, {
-              label: 'F1',
-              code: 'F1',
-              level: 1,
-              sortOrder: 0,
-            })
-            if (!isMountedRef.current || abortController.signal.aborted) return
-            loadedProject = { ...nextProject, floors: floorResponse.floors }
-            setSelectedFloorId(floorResponse.floor.id)
-            setMessage('Default floor created')
-          } catch (floorError) {
-            if (isMountedRef.current && !abortController.signal.aborted) {
-              setMessage(floorError instanceof Error ? floorError.message : 'Default floor creation failed')
-            }
-          }
-        } else if (nextProject.floors.length > 0) {
+        if (nextProject.floors.length > 0) {
           setSelectedFloorId(nextProject.floors[0].id)
         } else {
           setSelectedFloorId(null)
         }
-        setProject(loadedProject)
+        setProject(nextProject)
         setServerFeatures([])
         setPendingCreatedFeatures([])
         setPendingUpdatedFeatures({})
         setPendingDeletedFeatureIds([])
         setShowFloorSelector(false)
-        if (!shouldCreateDefaultFloor) {
-          setMessage('Project data loaded')
-        }
+        setMessage('Project data loaded')
       } catch (error) {
         if (!isMountedRef.current || abortController.signal.aborted) {
           return
@@ -1435,6 +1426,32 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     setSelectedFeatureIds([])
   }, [project])
 
+  const [isTogglingFloors, setIsTogglingFloors] = useState(false)
+  const handleToggleFloorsEnabled = useCallback(async (enabled: boolean) => {
+    if (!project || isTogglingFloors) return
+    setIsTogglingFloors(true)
+    setMessage(enabled ? 'Enabling floors...' : 'Disabling floors...')
+    try {
+      const response = await setFloorsEnabled(project.id, enabled)
+      if (!isMountedRef.current) return
+      setProject(response.project)
+      if (!enabled) {
+        setSelectedFloorId(null)
+      } else if (response.project.floors.length > 0) {
+        setSelectedFloorId(response.project.floors[0].id)
+      }
+      setMessage(enabled ? 'Floors enabled' : 'Floors disabled')
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Failed to update floors setting')
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsTogglingFloors(false)
+      }
+    }
+  }, [project, isTogglingFloors, setMessage, setSelectedFloorId])
+
   const handleCreateChildProject = useCallback(async () => {
     if (!project || !selectedBuildingFeature || !isMountedRef.current) return
     const featureId = selectedBuildingFeature.id as string | undefined
@@ -1443,10 +1460,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       return
     }
     try {
-      setMessage('Creating indoor project...')
-      const response = await createChildProject(project.id, featureId, {
-        editorMode: 'indoor',
-      })
+      setMessage('Creating child project...')
+      const response = await createChildProject(project.id, featureId)
       if (isMountedRef.current) {
         setProjectStack((stack) => [...stack, { id: project.id, name: project.name }])
         setActiveProjectId(response.childProjectId)
@@ -1516,8 +1531,96 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onBack()
   }, [map, onBack, project])
 
+  // Shared panel instances so the desktop docked panels and the mobile
+  // overlays render the exact same component with the same props.
+  const structurePanel = (
+    <EditorStructurePanel
+      project={project}
+      floors={floors}
+      selectedFloorId={selectedFloorId}
+      onSelectFloor={setSelectedFloorId}
+      selectedFeatureIds={selectedFeatureIds}
+      onSelectFeatureIds={setSelectedFeatureIds}
+      visibleFeatures={visibleFeatures}
+      tagFilter={tagFilter}
+      onTagFilterChange={setTagFilter}
+      floorsEnabled={floorsEnabled}
+      onToggleFloorsEnabled={handleToggleFloorsEnabled}
+      isTogglingFloors={isTogglingFloors}
+      onCreateFloor={handleCreateFloor}
+      isCreatingFloor={isCreatingFloor}
+      onUpdateFloor={handleUpdateFloor}
+      onDeleteFloor={handleDeleteFloor}
+      isUpdatingFloor={isUpdatingFloor}
+      importPreview={importPreview}
+      importError={importError}
+      importLoading={importLoading}
+      onPreviewImport={handlePreviewImport}
+      onCommitImport={handleCommitImport}
+      onUnpreviewImport={handleUnpreviewImport}
+    />
+  )
+
+  const inspectorPanel = (
+    <EditorSidebar
+      project={project}
+      projectConfig={projectConfig}
+      floors={floors}
+      selectedFloorId={selectedFloorId}
+      mapZoom={mapZoom}
+      mapReady={mapReady}
+      boundaryRendered={boundaryRendered}
+      backdropMode={backdropMode}
+      visibleFeatures={visibleFeatures}
+      draftFeature={draftCollection}
+      hoverCoordinate={hoverCoordinate}
+      snapPreview={snapPreview}
+      message={message}
+      selectedFeatures={selectedFeatures}
+      inspectorDraft={inspectorDraft}
+      onInspectorNameChange={setInspectorName}
+      onInspectorTagChange={setInspectorTag}
+      onInspectorNoteChange={setInspectorNoteText}
+      onInspectorFeatureTypeChange={setInspectorFeatureType}
+      onBackdropModeChange={setBackdropMode}
+      onSaveInspector={handleSaveInspector}
+      isSavingInspector={isSavingInspector}
+    />
+  )
+
   return (
     <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-100 text-slate-950">
+      <PanelGroup direction="horizontal" autoSaveId="spatial-editor-panels" className="h-full w-full">
+        {isDesktopLayout ? (
+          <>
+            <Panel
+              id="structure"
+              order={1}
+              ref={structurePanelRef}
+              collapsible
+              collapsedSize={0}
+              defaultSize={22}
+              minSize={14}
+              maxSize={34}
+              onCollapse={() => setLeftSidebarCollapsed(true)}
+              onExpand={() => setLeftSidebarCollapsed(false)}
+              className="hidden border-r border-slate-200 bg-white lg:block"
+            >
+              <div className="h-full overflow-hidden">{structurePanel}</div>
+            </Panel>
+            <PanelResizeHandle className="relative hidden w-1.5 bg-slate-200 outline-none transition-colors data-[resize-handle-state=drag]:bg-sky-400 data-[resize-handle-state=hover]:bg-sky-300 lg:block">
+              <button
+                type="button"
+                className="absolute right-0 top-1/2 z-30 flex h-14 w-6 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
+                onClick={() => togglePanelCollapse(structurePanelRef.current)}
+                aria-label={leftSidebarCollapsed ? 'Open project panel' : 'Collapse project panel'}
+              >
+                {leftSidebarCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
+              </button>
+            </PanelResizeHandle>
+          </>
+        ) : null}
+        <Panel id="map" order={2} minSize={40} className="relative min-w-0">
       <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-200">
         <div
           ref={containerRef}
@@ -1579,7 +1682,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           activeFeatureType={activeFeatureType}
           toolsEnabled={toolsEnabled}
           isSaving={isSaving || publishing}
-          floorRequired={Boolean(floorRequired)}
+          floorRequired={floorsEnabled}
           hasFloorSelection={Boolean(selectedFloorId)}
           onSetMode={handleSetMode}
           onClearDraft={() => setDraftPoints([])}
@@ -1619,7 +1722,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             selectedFloorId={selectedFloorId}
             onSelectFloor={setSelectedFloorId}
             onCreateFloor={handleCreateFloor}
-            isRequired={Boolean(floorRequired)}
+            isRequired={floorsEnabled}
           />
         ) : null}
         <div className="absolute bottom-5 right-4 z-30 flex flex-col items-end gap-2 lg:hidden">
@@ -1652,149 +1755,64 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             <span className="font-medium text-slate-900">{project?.name}</span>
           </div>
         ) : null}
-        <aside className="absolute inset-y-0 left-0 z-30 hidden w-[324px] overflow-visible lg:block">
-          <div
-            className={`absolute inset-y-0 left-0 flex w-[324px] transform-gpu items-center justify-start will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-              leftSidebarCollapsed ? '-translate-x-[300px]' : 'translate-x-0'
-            }`}
-          >
-            <div className="h-full w-[300px] overflow-hidden rounded-r-2xl border-r border-slate-200 bg-white shadow-lg">
-              <EditorStructurePanel
-                project={project}
-                floors={floors}
-                selectedFloorId={selectedFloorId}
-                onSelectFloor={setSelectedFloorId}
-                selectedFeatureIds={selectedFeatureIds}
-                onSelectFeatureIds={setSelectedFeatureIds}
-                visibleFeatures={visibleFeatures}
-                tagFilter={tagFilter}
-                onTagFilterChange={setTagFilter}
-                onCreateFloor={handleCreateFloor}
-                isCreatingFloor={isCreatingFloor}
-                onUpdateFloor={handleUpdateFloor}
-                onDeleteFloor={handleDeleteFloor}
-                isUpdatingFloor={isUpdatingFloor}
-                importPreview={importPreview}
-                importError={importError}
-                importLoading={importLoading}
-                onPreviewImport={handlePreviewImport}
-                onCommitImport={handleCommitImport}
-                onUnpreviewImport={handleUnpreviewImport}
-              />
-            </div>
-            <button
-              type="button"
-              className="ml-[-1px] flex h-14 w-6 items-center justify-center rounded-r-full border border-slate-200 border-l-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
-              onClick={() => setLeftSidebarCollapsed((current) => !current)}
-              aria-label={leftSidebarCollapsed ? 'Open project panel' : 'Collapse project panel'}
-            >
-              {leftSidebarCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
-            </button>
-          </div>
-        </aside>
-        <aside className="absolute inset-y-0 right-0 z-30 hidden w-[344px] overflow-visible lg:block">
-          <div
-            className={`absolute inset-y-0 right-0 flex w-[344px] transform-gpu items-center justify-end will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-              rightSidebarCollapsed ? 'translate-x-[320px]' : 'translate-x-0'
-            }`}
-          >
-            <button
-              type="button"
-              className="mr-[-1px] flex h-14 w-6 items-center justify-center rounded-l-full border border-slate-200 border-r-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
-              onClick={() => setRightSidebarCollapsed((current) => !current)}
-              aria-label={rightSidebarCollapsed ? 'Open inspector panel' : 'Collapse inspector panel'}
-            >
-              {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
-            </button>
-            <div className="h-full w-[320px] overflow-hidden rounded-l-2xl border-l border-slate-200 bg-white shadow-lg">
-              <EditorSidebar
-                project={project}
-                projectConfig={projectConfig}
-                floors={floors}
-                selectedFloorId={selectedFloorId}
-                mapZoom={mapZoom}
-                mapReady={mapReady}
-                boundaryRendered={boundaryRendered}
-                backdropMode={backdropMode}
-                visibleFeatures={visibleFeatures}
-                draftFeature={draftCollection}
-                hoverCoordinate={hoverCoordinate}
-                snapPreview={snapPreview}
-                message={message}
-                selectedFeatures={selectedFeatures}
-                inspectorDraft={inspectorDraft}
-                onInspectorNameChange={setInspectorName}
-                onInspectorTagChange={setInspectorTag}
-                onInspectorNoteChange={setInspectorNoteText}
-                onInspectorFeatureTypeChange={setInspectorFeatureType}
-                onBackdropModeChange={setBackdropMode}
-                onSaveInspector={handleSaveInspector}
-                isSavingInspector={isSavingInspector}
-              />
-            </div>
-          </div>
-        </aside>
       </main>
+        </Panel>
+        {isDesktopLayout ? (
+          <>
+            <PanelResizeHandle className="relative hidden w-1.5 bg-slate-200 outline-none transition-colors data-[resize-handle-state=drag]:bg-sky-400 data-[resize-handle-state=hover]:bg-sky-300 lg:block">
+              <button
+                type="button"
+                className="absolute left-0 top-1/2 z-30 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
+                onClick={() => togglePanelCollapse(inspectorPanelRef.current)}
+                aria-label={rightSidebarCollapsed ? 'Open inspector panel' : 'Collapse inspector panel'}
+              >
+                {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
+              </button>
+            </PanelResizeHandle>
+            <Panel
+              id="inspector"
+              order={3}
+              ref={inspectorPanelRef}
+              collapsible
+              collapsedSize={0}
+              defaultSize={24}
+              minSize={16}
+              maxSize={36}
+              onCollapse={() => setRightSidebarCollapsed(true)}
+              onExpand={() => setRightSidebarCollapsed(false)}
+              className="hidden border-l border-slate-200 bg-white lg:block"
+            >
+              <div className="h-full overflow-hidden">{inspectorPanel}</div>
+            </Panel>
+          </>
+        ) : null}
+      </PanelGroup>
 
-      {mobileStructureOpen ? (
-        <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileStructureOpen(false)}>
-          <div className="absolute left-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
-            <EditorStructurePanel
-              project={project}
-              floors={floors}
-              selectedFloorId={selectedFloorId}
-              onSelectFloor={setSelectedFloorId}
-              selectedFeatureIds={selectedFeatureIds}
-              onSelectFeatureIds={setSelectedFeatureIds}
-              visibleFeatures={visibleFeatures}
-              tagFilter={tagFilter}
-              onTagFilterChange={setTagFilter}
-              onCreateFloor={handleCreateFloor}
-              isCreatingFloor={isCreatingFloor}
-              onUpdateFloor={handleUpdateFloor}
-              onDeleteFloor={handleDeleteFloor}
-              isUpdatingFloor={isUpdatingFloor}
-              importPreview={importPreview}
-              importError={importError}
-              importLoading={importLoading}
-              onPreviewImport={handlePreviewImport}
-              onCommitImport={handleCommitImport}
-              onUnpreviewImport={handleUnpreviewImport}
-            />
-          </div>
-        </div>
-      ) : null}
+      <Dialog.Root open={mobileStructureOpen} onOpenChange={setMobileStructureOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" />
+          <Dialog.Content
+            className="fixed inset-y-0 left-0 z-50 h-full w-[90vw] max-w-[360px] overflow-hidden bg-white shadow-xl outline-none lg:hidden"
+            aria-describedby={undefined}
+          >
+            <Dialog.Title className="sr-only">Project structure</Dialog.Title>
+            {structurePanel}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
-      {mobileInspectorOpen ? (
-        <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileInspectorOpen(false)}>
-          <div className="absolute right-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
-            <EditorSidebar
-              project={project}
-              projectConfig={projectConfig}
-              floors={floors}
-              selectedFloorId={selectedFloorId}
-              mapZoom={mapZoom}
-              mapReady={mapReady}
-              boundaryRendered={boundaryRendered}
-              backdropMode={backdropMode}
-              visibleFeatures={visibleFeatures}
-              draftFeature={draftCollection}
-              hoverCoordinate={hoverCoordinate}
-              snapPreview={snapPreview}
-              message={message}
-              selectedFeatures={selectedFeatures}
-              inspectorDraft={inspectorDraft}
-              onInspectorNameChange={setInspectorName}
-              onInspectorTagChange={setInspectorTag}
-              onInspectorNoteChange={setInspectorNoteText}
-              onInspectorFeatureTypeChange={setInspectorFeatureType}
-              onBackdropModeChange={setBackdropMode}
-              onSaveInspector={handleSaveInspector}
-              isSavingInspector={isSavingInspector}
-            />
-          </div>
-        </div>
-      ) : null}
+      <Dialog.Root open={mobileInspectorOpen} onOpenChange={setMobileInspectorOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" />
+          <Dialog.Content
+            className="fixed inset-y-0 right-0 z-50 h-full w-[90vw] max-w-[360px] overflow-hidden bg-white shadow-xl outline-none lg:hidden"
+            aria-describedby={undefined}
+          >
+            <Dialog.Title className="sr-only">Inspector</Dialog.Title>
+            {inspectorPanel}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   )
 }

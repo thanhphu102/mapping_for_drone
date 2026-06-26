@@ -64,7 +64,7 @@ def _ensure_project_objects(project: dict[str, Any]) -> bool:
             "id": DEFAULT_OBJECT_ID,
             "name": "Default Object",
             "sourceKey": "legacy",
-            "mode": project.get("editorMode") or "custom",
+            "mode": "custom",
             "floors": _clone_json(floors),
         }
         objects.append(default_object)
@@ -79,6 +79,15 @@ def _ensure_project_objects(project: dict[str, Any]) -> bool:
             project["floors"] = _clone_json(default_object_floors)
             modified = True
     return modified
+
+
+def _ensure_floors_enabled(project: dict[str, Any]) -> bool:
+    if "floorsEnabled" in project:
+        return False
+    legacy_mode = project.get("editorMode")
+    floors = project.get("floors")
+    project["floorsEnabled"] = legacy_mode in {"building", "indoor"} or bool(floors)
+    return True
 
 
 def _ensure_project_feature_snapshots(project: dict[str, Any]) -> None:
@@ -117,14 +126,14 @@ class JsonProjectRepository:
 
             if "projects" not in data or not isinstance(data["projects"], list):
                 data["projects"] = []
-            if "osmCityCalibrations" not in data or not isinstance(data["osmCityCalibrations"], dict):
-                data["osmCityCalibrations"] = {}
 
             modified = False
             for project in data["projects"]:
                 if not isinstance(project, dict):
                     continue
                 if _ensure_project_objects(project):
+                    modified = True
+                if _ensure_floors_enabled(project):
                     modified = True
                 if "layers" in project:
                     project.pop("layers", None)
@@ -269,23 +278,3 @@ class JsonProjectRepository:
             await self.save_document(document)
 
         return deleted
-
-    async def get_osm_city_calibration(self, city_key: str) -> dict[str, Any] | None:
-        document = await self.load_document()
-        calibrations = document.get("osmCityCalibrations")
-        if not isinstance(calibrations, dict):
-            return None
-        calibration = calibrations.get(city_key)
-        if not isinstance(calibration, dict):
-            return None
-        return calibration
-
-    async def upsert_osm_city_calibration(self, city_key: str, calibration: dict[str, Any]) -> dict[str, Any]:
-        document = await self.load_document()
-        calibrations = document.get("osmCityCalibrations")
-        if not isinstance(calibrations, dict):
-            calibrations = {}
-            document["osmCityCalibrations"] = calibrations
-        calibrations[city_key] = calibration
-        await self.save_document(document)
-        return calibration

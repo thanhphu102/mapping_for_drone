@@ -24,7 +24,7 @@ class FloorService:
                 "id": DEFAULT_OBJECT_ID,
                 "name": "Default Object",
                 "sourceKey": "legacy",
-                "mode": project.get("editorMode") or "custom",
+                "mode": "custom",
                 "floors": [],
             }
             objects.append(default_object)

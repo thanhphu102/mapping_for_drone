@@ -1,7 +1,8 @@
 import { Building2, Layers3, Search } from 'lucide-react'
 import type { Feature } from 'geojson'
 import type { DrawingProject, SpatialFloor } from '../types'
-import { useState } from 'react'
+import { memo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { ImportScanJsonPanel } from './ImportScanJsonPanel'
 import type { ImportPolygonPayload, ImportScanPreviewResponse } from '../services/imports'
 
@@ -15,6 +16,9 @@ interface EditorStructurePanelProps {
   visibleFeatures: Feature[]
   tagFilter: string
   onTagFilterChange: (value: string) => void
+  floorsEnabled: boolean
+  onToggleFloorsEnabled: (enabled: boolean) => void
+  isTogglingFloors: boolean
   onCreateFloor: () => void
   isCreatingFloor: boolean
   onUpdateFloor: (floor: SpatialFloor, updates: Partial<Pick<SpatialFloor, 'label' | 'code'>>) => void
@@ -38,7 +42,7 @@ function featureTag(feature: Feature) {
   return typeof props.tag === 'string' ? props.tag : ''
 }
 
-export function EditorStructurePanel({
+export const EditorStructurePanel = memo(function EditorStructurePanel({
   project,
   floors,
   selectedFloorId,
@@ -48,6 +52,9 @@ export function EditorStructurePanel({
   visibleFeatures,
   tagFilter,
   onTagFilterChange,
+  floorsEnabled,
+  onToggleFloorsEnabled,
+  isTogglingFloors,
   onCreateFloor,
   isCreatingFloor,
   onUpdateFloor,
@@ -71,6 +78,14 @@ export function EditorStructurePanel({
     return tag.includes(normalizedFilter) || title.includes(normalizedFilter)
   })
 
+  const objectsScrollRef = useRef<HTMLDivElement>(null)
+  const objectsVirtualizer = useVirtualizer({
+    count: filteredFeatures.length,
+    getScrollElement: () => objectsScrollRef.current,
+    estimateSize: () => 60,
+    overscan: 8,
+  })
+
   return (
     <aside className="flex h-full w-full flex-col bg-white text-slate-900">
       <header className="border-b border-slate-200 px-5 py-4">
@@ -82,10 +97,34 @@ export function EditorStructurePanel({
       </header>
 
       <section className="border-b border-slate-200 px-5 py-4">
-        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-          <Layers3 className="size-3.5" />
-          Floors
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <Layers3 className="size-3.5" />
+            Floors
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={floorsEnabled}
+            disabled={!project || isTogglingFloors}
+            onClick={() => onToggleFloorsEnabled(!floorsEnabled)}
+            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition disabled:opacity-50 ${
+              floorsEnabled ? 'bg-sky-500' : 'bg-slate-300'
+            }`}
+            title={floorsEnabled ? 'Disable floors' : 'Enable floors'}
+          >
+            <span
+              className={`inline-block size-4 transform rounded-full bg-white shadow transition ${
+                floorsEnabled ? 'translate-x-4' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
         </div>
+        {!floorsEnabled ? (
+          <p className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-500">
+            Floors are off. Enable to manage multiple levels for this project.
+          </p>
+        ) : (
         <div className="space-y-1">
           <button
             type="button"
@@ -201,6 +240,7 @@ export function EditorStructurePanel({
             })
           )}
         </div>
+        )}
       </section>
 
       <details className="border-b border-slate-200 px-5 py-4">
@@ -220,9 +260,9 @@ export function EditorStructurePanel({
         </div>
       </details>
 
-      <section className="min-h-0 flex-1 p-5">
-        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Objects</div>
-        <div className="relative mb-2">
+      <section className="flex min-h-0 flex-1 flex-col p-5">
+        <div className="mb-3 flex shrink-0 items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Objects</div>
+        <div className="relative mb-2 shrink-0">
           <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-slate-400" />
           <input
             value={tagFilter}
@@ -231,33 +271,49 @@ export function EditorStructurePanel({
             className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 outline-none ring-sky-400 focus:ring"
           />
         </div>
-        <div className="h-full space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
+        <div
+          ref={objectsScrollRef}
+          className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2"
+        >
           {filteredFeatures.length === 0 ? (
             <div className="px-2 py-3 text-xs text-slate-500">No objects in this view</div>
           ) : (
-            filteredFeatures.map((feature) => {
-              const id = String(feature.id ?? feature.properties?.id ?? '')
-              const isSelected = selectedFeatureIds.includes(id)
-              const tag = featureTag(feature)
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className={`w-full rounded-lg border px-3 py-2.5 text-left transition ${
-                    isSelected
-                      ? 'border-sky-300 bg-sky-50 text-slate-950'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-950'
-                  }`}
-                  onClick={() => onSelectFeatureIds([id])}
-                >
-                  <div className="truncate text-sm font-semibold text-slate-950">{featureTitle(feature)}</div>
-                  <div className="mt-0.5 truncate text-xs text-slate-600">{tag || 'No tag'} · {feature.geometry.type}</div>
-                </button>
-              )
-            })
+            <div
+              className="relative w-full"
+              style={{ height: `${objectsVirtualizer.getTotalSize()}px` }}
+            >
+              {objectsVirtualizer.getVirtualItems().map((virtualRow) => {
+                const feature = filteredFeatures[virtualRow.index]
+                const id = String(feature.id ?? feature.properties?.id ?? '')
+                const isSelected = selectedFeatureIds.includes(id)
+                const tag = featureTag(feature)
+                return (
+                  <div
+                    key={id}
+                    data-index={virtualRow.index}
+                    ref={objectsVirtualizer.measureElement}
+                    className="absolute left-0 top-0 w-full pb-2"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    <button
+                      type="button"
+                      className={`w-full rounded-lg border px-3 py-2.5 text-left transition ${
+                        isSelected
+                          ? 'border-sky-300 bg-sky-50 text-slate-950'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-950'
+                      }`}
+                      onClick={() => onSelectFeatureIds([id])}
+                    >
+                      <div className="truncate text-sm font-semibold text-slate-950">{featureTitle(feature)}</div>
+                      <div className="mt-0.5 truncate text-xs text-slate-600">{tag || 'No tag'} · {feature.geometry.type}</div>
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
           )}
         </div>
       </section>
     </aside>
   )
-}
+})

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createFrontendWebSocket } from '../services/realtime'
+import { createLogger } from '../../../shared/logging/logger'
 import type {
   ConnectionStatus,
   DroneRegistry,
@@ -8,6 +9,8 @@ import type {
   FrontendEvent,
   TelemetrySnapshot,
 } from '../types'
+
+const logger = createLogger('useDroneTelemetry')
 
 function initialSnapshot(): TelemetrySnapshot {
   return {
@@ -210,10 +213,10 @@ export function useDroneTelemetry() {
           }
 
           if (message.type === 'command_sent') {
-            console.info('Command sent to:', message.to ?? [])
+            logger.info('Command sent to:', message.to ?? [])
           }
         } catch (error) {
-          console.error('WebSocket parse error:', error)
+          logger.error('WebSocket parse error:', error)
           setConnectionMessage('Telemetry message parse error')
         }
       }

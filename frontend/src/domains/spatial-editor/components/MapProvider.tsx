@@ -15,6 +15,9 @@ import {
   OSM_SOURCE_ID,
   OSM_TILE_URL,
 } from '../../map/baseMapModes'
+import { createLogger } from '../../../shared/logging/logger'
+
+const logger = createLogger('MapProvider')
 
 // eslint-disable-next-line react-refresh/only-export-components
 export function useMapContext() {
@@ -140,7 +143,7 @@ export function MapProvider({ children }: MapProviderProps) {
       const handleError = (event: unknown) => {
         const maybeError = event as { error?: unknown }
         if (isMountedRef.current) {
-          console.warn('MapProvider map error:', maybeError.error ?? maybeError)
+          logger.warn('map error:', maybeError.error ?? maybeError)
         }
       }
 

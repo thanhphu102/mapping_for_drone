@@ -3,7 +3,9 @@ import type { Feature, FeatureCollection, Geometry, Position } from 'geojson'
 import type { Map, MapMouseEvent } from 'maplibre-gl'
 import type { DrawingProject } from '../types'
 import type { SnapPreview } from './useSnapEngine'
+import { createLogger } from '../../../shared/logging/logger'
 
+const logger = createLogger('useDrawingEngine')
 const featureLayers = ['project-features-fill', 'project-features-line', 'project-features-point']
 const DEBUG_RECTANGLE_DRAWING = false
 
@@ -301,13 +303,13 @@ function boxEndFromPointer(
       y: startPx.y + Math.sign(dy || 1) * size,
     }
     if (DEBUG_RECTANGLE_DRAWING) {
-      console.info('[rect-debug] square', { startPx, pointer, endPx })
+      logger.info('[rect-debug] square', { startPx, pointer, endPx })
     }
     const lngLat = map.unproject([endPx.x, endPx.y])
     return [lngLat.lng, lngLat.lat]
   }
   if (DEBUG_RECTANGLE_DRAWING && variant === 'rectangle') {
-    console.info('[rect-debug] rectangle', { startPx, pointer })
+    logger.info('[rect-debug] rectangle', { startPx, pointer })
   }
   const lngLat = map.unproject([pointer.x, pointer.y])
   return [lngLat.lng, lngLat.lat]

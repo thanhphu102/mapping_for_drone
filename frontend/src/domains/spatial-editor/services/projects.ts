@@ -1,6 +1,5 @@
 import type { Feature, FeatureCollection, MultiPolygon, Polygon } from 'geojson'
 import type {
-  OsmCityCalibration,
   OsmElementGeometryResponse,
   OsmElementType,
 } from '../../osm/types'
@@ -10,23 +9,15 @@ import { readJsonResponse } from './api'
 export async function fetchOsmElementGeometry(
   osmType: OsmElementType,
   osmId: number,
-  options?: {
-    calibrationCityKey?: string
-  },
 ): Promise<OsmElementGeometryResponse> {
-  const params = new URLSearchParams()
-  if (options?.calibrationCityKey) {
-    params.set('calibrationCityKey', options.calibrationCityKey)
-  }
-  const query = params.toString()
-  const response = await fetch(`/api/osm/elements/${osmType}/${osmId}/geometry${query ? `?${query}` : ''}`)
+  const response = await fetch(`/api/osm/elements/${osmType}/${osmId}/geometry`)
   const data = await readJsonResponse<OsmElementGeometryResponse | null>(response)
 
   if (!data || typeof data !== 'object') {
     throw new Error('OSM geometry response is empty')
   }
 
-  if (!data.geometry || !data.editorMode) {
+  if (!data.geometry) {
     throw new Error('OSM geometry response is incomplete')
   }
 
@@ -37,17 +28,11 @@ export async function createDrawingProjectFromOsm(
   osmType: OsmElementType,
   osmId: number,
   options?: {
-    calibrationCityKey?: string
-    editorModeOverride?: string
     confirmedLargeArea?: boolean
-    calibrationOffsetLon?: number
-    calibrationOffsetLat?: number
-    calibrationRotationDeg?: number
   },
 ): Promise<{
   projectId: string
   project: DrawingProject
-  editorMode: string
   warnings: string[]
 }> {
   const response = await fetch('/api/drawing-projects/from-osm', {
@@ -58,12 +43,7 @@ export async function createDrawingProjectFromOsm(
     body: JSON.stringify({
       osmType,
       osmId,
-      calibrationCityKey: options?.calibrationCityKey,
-      editorModeOverride: options?.editorModeOverride,
       confirmedLargeArea: options?.confirmedLargeArea,
-      calibrationOffsetLon: options?.calibrationOffsetLon ?? 0,
-      calibrationOffsetLat: options?.calibrationOffsetLat ?? 0,
-      calibrationRotationDeg: options?.calibrationRotationDeg ?? 0,
     }),
   })
   const data = (await response.json().catch(() => null)) as
@@ -100,40 +80,8 @@ export async function createDrawingProjectFromOsm(
   return data as {
     projectId: string
     project: DrawingProject
-    editorMode: string
     warnings: string[]
   }
-}
-
-export async function fetchOsmCityCalibration(
-  cityKey: string,
-): Promise<OsmCityCalibration | null> {
-  const response = await fetch(
-    `/api/osm/calibrations/by-city?cityKey=${encodeURIComponent(cityKey)}`,
-  )
-  const data = await readJsonResponse<{
-    cityKey: string
-    calibration: OsmCityCalibration | null
-  }>(response)
-  return data.calibration
-}
-
-export async function saveOsmCityCalibration(
-  payload: Omit<OsmCityCalibration, 'updatedAt'>,
-): Promise<OsmCityCalibration> {
-  const response = await fetch('/api/osm/calibrations/by-city', {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  })
-  const data = await readJsonResponse<{
-    ok: boolean
-    cityKey: string
-    calibration: OsmCityCalibration
-  }>(response)
-  return data.calibration
 }
 
 export async function fetchDrawingProject(
@@ -194,7 +142,6 @@ export async function createSpatialProjectFromGeometry(
   payload: {
     name: string
     geometry: Polygon | MultiPolygon
-    editorMode: string
   },
 ): Promise<{ projectId: string; project: DrawingProject }> {
   const response = await fetch('/api/spatial-projects/from-geometry', {
@@ -209,7 +156,6 @@ export async function importSpatialProjectGeoJson(
   payload: {
     name: string
     geojson: Feature | FeatureCollection | Polygon | MultiPolygon
-    editorMode?: string
   },
 ): Promise<{ projectId: string; project: DrawingProject }> {
   const response = await fetch('/api/spatial-projects/import-geojson', {
@@ -223,7 +169,7 @@ export async function importSpatialProjectGeoJson(
 export async function createChildProject(
   projectId: string,
   featureId: string,
-  options?: { name?: string; editorMode?: 'building' | 'indoor' },
+  options?: { name?: string },
 ): Promise<{ childProjectId: string; project: DrawingProject }> {
   const response = await fetch(
     `/api/drawing-projects/${projectId}/features/${featureId}/create-child-project`,
@@ -234,6 +180,21 @@ export async function createChildProject(
     },
   )
   return readJsonResponse<{ childProjectId: string; project: DrawingProject }>(response)
+}
+
+export async function setFloorsEnabled(
+  projectId: string,
+  floorsEnabled: boolean,
+): Promise<{ project: DrawingProject }> {
+  const response = await fetch(
+    `/api/drawing-projects/${projectId}/floors-enabled`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ floorsEnabled }),
+    },
+  )
+  return readJsonResponse<{ project: DrawingProject }>(response)
 }
 
 export async function fetchChildProjects(
