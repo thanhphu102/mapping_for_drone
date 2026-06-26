@@ -7,20 +7,17 @@ from fastapi import HTTPException
 
 from ..core.time import now_ts
 from ..repositories.json_project_repository import JsonProjectRepository
-from ..schemas.project import EditorMode, ProjectSource, ProjectStatus
+from ..schemas.project import ProjectSource, ProjectStatus
 from . import geometry_service
 
-allowed_editor_modes = {
-    "region",
-    "campus",
-    "agriculture",
-    "building",
-    "indoor",
-    "parking",
-    "custom",
-}
 large_area_threshold_m2 = 5_000_000
 extremely_large_area_threshold_m2 = 50_000_000
+
+DEFAULT_ZOOM_THRESHOLDS: dict[str, Any] = {
+    "boundaryMinZoom": 13,
+    "detailMinZoom": 16,
+    "indoorMinZoom": None,
+}
 
 
 def clone_json_value(value: Any) -> Any:
@@ -29,53 +26,8 @@ def clone_json_value(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
-def validate_editor_mode(value: str | None) -> EditorMode:
-    if value not in allowed_editor_modes:
-        raise HTTPException(status_code=422, detail="Invalid editorMode")
-    return value  # type: ignore[return-value]
-
-
-def classify_enclosing_space(
-    tags: dict[str, str], geometry_stats_value: dict[str, Any], source: ProjectSource
-) -> dict[str, Any]:
+def area_warnings(geometry_stats_value: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
-    editor_mode: EditorMode = "custom"
-    confidence = 0.45
-    reason = "Fallback classification for a valid enclosing polygon."
-
-    if source in {"manual", "imported"}:
-        editor_mode = "custom"
-        confidence = 0.95
-        reason = f"Source is {source}, so custom mode is the default."
-    elif "building" in tags:
-        editor_mode = "building"
-        confidence = 0.97
-        reason = f"Detected building={tags.get('building')}"
-    elif tags.get("amenity") in {"university", "school", "hospital", "college"} or tags.get("operator:type") == "university":
-        editor_mode = "campus"
-        confidence = 0.94
-        reason = f"Detected amenity={tags.get('amenity') or tags.get('operator:type')}"
-    elif tags.get("landuse") in {"farmland", "orchard", "meadow", "farmyard"} or "crop" in tags:
-        editor_mode = "agriculture"
-        confidence = 0.92
-        reason = f"Detected agricultural tag {tags.get('landuse') or 'crop=*'}"
-    elif tags.get("amenity") == "parking":
-        editor_mode = "parking"
-        confidence = 0.95
-        reason = "Detected amenity=parking"
-    elif tags.get("boundary") == "administrative":
-        editor_mode = "region"
-        confidence = 0.9
-        reason = "Detected boundary=administrative"
-        warnings.append("Administrative boundary may be too large for detailed editing.")
-    elif any(key in tags for key in ("natural", "landuse", "leisure", "amenity")):
-        editor_mode = "region"
-        confidence = 0.78
-        for key in ("natural", "landuse", "leisure", "amenity"):
-            if tags.get(key):
-                reason = f"Detected {key}={tags[key]}"
-                break
-
     area_m2 = float(geometry_stats_value["areaM2"])
     if area_m2 >= large_area_threshold_m2:
         warnings.append("Large area detected. Editing remains supported, but dense detail may be harder to manage.")
@@ -83,40 +35,13 @@ def classify_enclosing_space(
         warnings.append("Extremely large boundary detected. Confirmation is required before project creation.")
 
     return {
-        "editorMode": editor_mode,
-        "confidence": confidence,
-        "reason": reason,
         "warnings": warnings,
         "requiresConfirmation": area_m2 >= extremely_large_area_threshold_m2,
     }
 
 
-def zoom_thresholds_for_mode(editor_mode: EditorMode) -> dict[str, Any]:
-    if editor_mode in {"building", "indoor"}:
-        return {"boundaryMinZoom": 14, "detailMinZoom": 17, "indoorMinZoom": 18}
-    if editor_mode in {"campus", "parking"}:
-        return {"boundaryMinZoom": 13, "detailMinZoom": 16, "indoorMinZoom": None}
-    return {"boundaryMinZoom": 12, "detailMinZoom": 15, "indoorMinZoom": None}
-
-
-def default_floors(editor_mode: EditorMode) -> list[dict[str, Any]]:
-    if editor_mode in {"building", "indoor"}:
-        return [
-            {
-                "id": "floor-1",
-                "label": "1",
-                "code": "F1",
-                "level": 1,
-                "elevation": 0,
-                "visible": True,
-                "sortOrder": 0,
-            }
-        ]
-    return []
-
-
-def default_project_config(editor_mode: EditorMode) -> dict[str, Any]:
-    thresholds = zoom_thresholds_for_mode(editor_mode)
+def default_project_config() -> dict[str, Any]:
+    thresholds = DEFAULT_ZOOM_THRESHOLDS
     return {
         "canvasMode": "dimOutside",
         "defaultZoom": thresholds["boundaryMinZoom"] + 2,
@@ -144,18 +69,17 @@ def build_project_payload(
     name: str,
     source: ProjectSource,
     geometry: dict[str, Any],
-    editor_mode: EditorMode,
     osm_type: str | None,
     osm_id: int | None,
     osm_tags: dict[str, str],
     parent_project_id: str | None = None,
     source_feature_id: str | None = None,
     status: ProjectStatus = "draft",
+    floors_enabled: bool = False,
 ) -> dict[str, Any]:
     now = now_ts()
-    thresholds = zoom_thresholds_for_mode(editor_mode)
+    thresholds = DEFAULT_ZOOM_THRESHOLDS
     stats = geometry_service.geometry_stats(geometry)
-    floors = default_floors(editor_mode)
     return {
         "id": str(uuid4()),
         "name": name,
@@ -163,7 +87,6 @@ def build_project_payload(
         "osmType": osm_type,
         "osmId": osm_id,
         "osmTags": osm_tags,
-        "editorMode": editor_mode,
         "baseGeometry": geometry,
         "bbox": stats["bbox"],
         "areaSquareKm": stats["areaSquareKm"],
@@ -173,17 +96,18 @@ def build_project_payload(
         "boundaryMinZoom": thresholds["boundaryMinZoom"],
         "detailMinZoom": thresholds["detailMinZoom"],
         "indoorMinZoom": thresholds["indoorMinZoom"],
-        "config": default_project_config(editor_mode),
+        "config": default_project_config(),
+        "floorsEnabled": floors_enabled,
         "objects": [
             {
                 "id": "object-default",
                 "name": name,
                 "sourceKey": source,
-                "mode": editor_mode,
-                "floors": clone_json_value(floors),
+                "mode": "custom",
+                "floors": [],
             }
         ],
-        "floors": floors,
+        "floors": [],
         "features": [],
         "publishedFeatures": [],
         "parentProjectId": parent_project_id,

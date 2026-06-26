@@ -18,13 +18,10 @@ from ..schemas.project import (
     CreateProjectFromOsmRequest,
     ImportGeoJsonProjectRequest,
     OsmType,
+    SetFloorsEnabledRequest,
 )
 from ..services import geometry_service
-from ..services.project_service import (
-    build_project_payload,
-    classify_enclosing_space,
-    validate_editor_mode,
-)
+from ..services.project_service import area_warnings, build_project_payload
 
 router = APIRouter()
 
@@ -34,29 +31,22 @@ async def create_drawing_project_from_osm(payload: CreateProjectFromOsmRequest):
     full = osm_service.fetch_osm_full(payload.osmType, payload.osmId)
     geometry, tags = osm_service.osm_to_geometry(full, payload.osmType, payload.osmId)
     stats = geometry_service.geometry_stats(geometry)
-    classification = classify_enclosing_space(tags, stats, "openstreetmap")
-    if classification["requiresConfirmation"] and not payload.confirmedLargeArea:
+    warnings = area_warnings(stats)
+    if warnings["requiresConfirmation"] and not payload.confirmedLargeArea:
         raise HTTPException(
             status_code=409,
             detail=json.dumps(
                 {
                     "message": "Extremely large boundary requires confirmation before project creation.",
                     "requiresConfirmation": True,
-                    "warnings": classification["warnings"],
-                    "classification": classification,
+                    "warnings": warnings["warnings"],
                 }
             ),
         )
-    editor_mode = (
-        validate_editor_mode(payload.editorModeOverride)
-        if payload.editorModeOverride
-        else classification["editorMode"]
-    )
     project = build_project_payload(
         name=tags.get("name") or tags.get("operator") or f"OSM {payload.osmType} {payload.osmId}",
         source="openstreetmap",
         geometry=geometry,
-        editor_mode=editor_mode,
         osm_type=payload.osmType,
         osm_id=payload.osmId,
         osm_tags=tags,
@@ -66,21 +56,17 @@ async def create_drawing_project_from_osm(payload: CreateProjectFromOsmRequest):
     return {
         "projectId": stored_project["id"],
         "project": stored_project,
-        "editorMode": editor_mode,
-        "warnings": classification["warnings"],
-        "classification": classification,
+        "warnings": warnings["warnings"],
     }
 
 
 @router.post("/api/spatial-projects/from-geometry")
 async def create_spatial_project_from_geometry(payload: CreateProjectFromGeometryRequest):
     geometry = geometry_service.normalize_to_multipolygon_geometry(payload.geometry)
-    editor_mode = validate_editor_mode(payload.editorMode)
     project = build_project_payload(
         name=payload.name,
         source="manual",
         geometry=geometry,
-        editor_mode=editor_mode,
         osm_type=None,
         osm_id=None,
         osm_tags={},
@@ -152,7 +138,6 @@ async def create_no_fly_zone(payload: CreateNoFlyZoneRequest):
         name=name,
         source="manual",
         geometry=geometry_service.normalize_to_multipolygon_geometry(payload.geometry),
-        editor_mode="region",
         osm_type=None,
         osm_id=None,
         osm_tags={},
@@ -179,17 +164,11 @@ async def update_no_fly_zone(project_id: str, payload: CreateNoFlyZoneRequest):
 async def import_spatial_project_geojson(payload: ImportGeoJsonProjectRequest):
     geometry = geometry_service.geometry_from_geojson_payload(payload.geojson)
     stats = geometry_service.geometry_stats(geometry)
-    classification = classify_enclosing_space({}, stats, "imported")
-    editor_mode = (
-        validate_editor_mode(payload.editorMode)
-        if payload.editorMode
-        else classification["editorMode"]
-    )
+    warnings = area_warnings(stats)
     project = build_project_payload(
         name=payload.name,
         source="imported",
         geometry=geometry,
-        editor_mode=editor_mode,
         osm_type=None,
         osm_id=None,
         osm_tags={},
@@ -199,7 +178,7 @@ async def import_spatial_project_geojson(payload: ImportGeoJsonProjectRequest):
     return {
         "projectId": stored_project["id"],
         "project": stored_project,
-        "classification": classification,
+        "warnings": warnings["warnings"],
     }
 
 
@@ -244,6 +223,15 @@ async def delete_drawing_project(project_id: str):
     return {"ok": True}
 
 
+@router.put("/api/drawing-projects/{project_id}/floors-enabled")
+async def set_drawing_project_floors_enabled(project_id: str, payload: SetFloorsEnabledRequest):
+    async with project_lock:
+        project = await project_service.get_project_or_404(project_id)
+        project["floorsEnabled"] = payload.floorsEnabled
+        stored_project = await project_service.save_project(project)
+    return {"project": stored_project}
+
+
 @router.post("/api/drawing-projects/{project_id}/features/{feature_id}/create-child-project")
 async def create_child_project_from_feature(
     project_id: str, feature_id: str, payload: CreateChildProjectRequest
@@ -256,15 +244,11 @@ async def create_child_project_from_feature(
     if not isinstance(geometry, dict):
         raise HTTPException(status_code=422, detail="Feature geometry is missing")
     base_geometry = geometry_service.normalize_to_multipolygon_geometry(geometry)
-    editor_mode = validate_editor_mode(payload.editorMode)
-    if editor_mode not in {"building", "indoor"}:
-        raise HTTPException(status_code=422, detail="Child project must use building or indoor mode")
     feature_properties = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
     child_project = build_project_payload(
         name=payload.name or str(feature_properties.get("name") or "Child Building Project"),
         source="manual",
         geometry=base_geometry,
-        editor_mode=editor_mode,
         osm_type=None,
         osm_id=None,
         osm_tags={},

@@ -6,7 +6,7 @@ from ..core.config import DEBUG_OSM
 from ..dependencies import osm_service
 from ..schemas.project import OsmType
 from ..services import geometry_service
-from ..services.project_service import classify_enclosing_space
+from ..services.project_service import area_warnings
 
 router = APIRouter()
 
@@ -29,18 +29,17 @@ async def get_osm_element_geometry(osm_type: OsmType, osm_id: int):
     full = osm_service.fetch_osm_full(osm_type, osm_id)
     geometry, tags = osm_service.osm_to_geometry(full, osm_type, osm_id)
     stats = geometry_service.geometry_stats(geometry)
-    classification = classify_enclosing_space(tags, stats, "openstreetmap")
+    warnings = area_warnings(stats)
     return {
         "osmType": osm_type,
         "osmId": osm_id,
         "tags": tags,
         "geometry": geometry,
-        "editorMode": classification["editorMode"],
-        "classification": classification,
         "bbox": stats["bbox"],
         "areaSquareKm": stats["areaSquareKm"],
         "areaM2": stats["areaM2"],
         "perimeterM": stats["perimeterM"],
         "pointCount": stats["pointCount"],
-        "warnings": classification["warnings"],
+        "warnings": warnings["warnings"],
+        "requiresConfirmation": warnings["requiresConfirmation"],
     }

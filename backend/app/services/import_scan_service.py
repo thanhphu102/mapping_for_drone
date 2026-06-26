@@ -108,7 +108,7 @@ class ImportScanService:
             "id": object_id,
             "name": object_id,
             "sourceKey": "import",
-            "mode": project.get("editorMode") or "custom",
+            "mode": "custom",
             "floors": [],
         }
         objects.append(next_object)

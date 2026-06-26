@@ -64,7 +64,7 @@ def _ensure_project_objects(project: dict[str, Any]) -> bool:
             "id": DEFAULT_OBJECT_ID,
             "name": "Default Object",
             "sourceKey": "legacy",
-            "mode": project.get("editorMode") or "custom",
+            "mode": "custom",
             "floors": _clone_json(floors),
         }
         objects.append(default_object)
@@ -79,6 +79,15 @@ def _ensure_project_objects(project: dict[str, Any]) -> bool:
             project["floors"] = _clone_json(default_object_floors)
             modified = True
     return modified
+
+
+def _ensure_floors_enabled(project: dict[str, Any]) -> bool:
+    if "floorsEnabled" in project:
+        return False
+    legacy_mode = project.get("editorMode")
+    floors = project.get("floors")
+    project["floorsEnabled"] = legacy_mode in {"building", "indoor"} or bool(floors)
+    return True
 
 
 def _ensure_project_feature_snapshots(project: dict[str, Any]) -> None:
@@ -123,6 +132,8 @@ class JsonProjectRepository:
                 if not isinstance(project, dict):
                     continue
                 if _ensure_project_objects(project):
+                    modified = True
+                if _ensure_floors_enabled(project):
                     modified = True
                 if "layers" in project:
                     project.pop("layers", None)
