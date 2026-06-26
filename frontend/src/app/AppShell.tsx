@@ -1,9 +1,12 @@
 import { ChevronLeft, ChevronRight, MapPinned, PanelRightClose, PanelRightOpen } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import type { ImperativePanelHandle } from 'react-resizable-panels'
 import { DroneMap } from '../domains/map/components/DroneMap'
 import { Notice, type NoticeState } from '../shared/components/Notice'
 import { OsmEnclosingPanel } from '../domains/osm/components/OsmEnclosingPanel'
 import { DroneControlPanel } from './components/DroneControlPanel'
+import { useMediaQuery } from '../shared/hooks/useMediaQuery'
 import type { LocationFetchState, SidebarMode } from '../domains/osm/hooks/useOsmSelectionFlow'
 import type { TrackingFlowState } from '../domains/tracking/hooks/useTrackingFlow'
 import type {
@@ -109,9 +112,30 @@ export function AppShell({
 }: AppShellProps) {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false)
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const sidebarPanelRef = useRef<ImperativePanelHandle>(null)
 
-  const isDesktopCollapsed = sidebarMode === 'osmEnclosing' ? false : desktopSidebarCollapsed
   const isMobileDrawerOpen = sidebarMode === 'osmEnclosing' ? true : mobileSidebarOpen
+
+  // The OSM enclosing flow always needs the sidebar visible; force-expand it
+  // whenever that mode becomes active.
+  useEffect(() => {
+    if (sidebarMode === 'osmEnclosing') {
+      sidebarPanelRef.current?.expand()
+    }
+  }, [sidebarMode])
+
+  const toggleDesktopSidebar = () => {
+    const panel = sidebarPanelRef.current
+    if (!panel) {
+      return
+    }
+    if (panel.isCollapsed()) {
+      panel.expand()
+    } else {
+      panel.collapse()
+    }
+  }
 
   const sidebarContent = sidebarMode === 'osmEnclosing' ? (
     <OsmEnclosingPanel
@@ -167,60 +191,82 @@ export function AppShell({
     </>
   )
 
+  const droneMap = (
+    <DroneMap
+      dronesById={dronesById}
+      dirtyIds={dirtyIds}
+      selectedTarget={selectedTarget}
+      connectedCount={connectedCount}
+      commandStatus={commandStatus}
+      highlightedCandidate={locationFetch.highlightedCandidate}
+      selectedBoundaryGeometry={selectedBoundaryGeometry}
+      isFetchingCandidates={locationFetch.status === 'loading_candidates'}
+      isFetchingFull={locationFetch.status === 'loading_full'}
+      locationFetchMessage={locationFetch.message}
+      onTargetSelect={onTargetSelect}
+      onFetchLocation={onFetchLocation}
+      onCancelTarget={onCancelTarget}
+      onConfirmTarget={onConfirmTarget}
+      onTrackingNotice={onTrackingNotice}
+      onGeofenceBreach={onGeofenceBreach}
+      selectedTrackingDroneId={selectedTrackingDroneId}
+      onTrackingStateChange={onTrackingStateChange}
+      onTrackingControllerReady={onTrackingControllerReady}
+      hideTargetPopover={sidebarMode === 'osmEnclosing'}
+    />
+  )
+
   return (
     <div className="min-h-screen h-dvh bg-slate-100 text-slate-950">
-      <div className="flex h-full flex-col lg:flex-row">
-        <main className="relative min-h-0 flex-1">
-          <DroneMap
-            dronesById={dronesById}
-            dirtyIds={dirtyIds}
-            selectedTarget={selectedTarget}
-            connectedCount={connectedCount}
-            commandStatus={commandStatus}
-            highlightedCandidate={locationFetch.highlightedCandidate}
-            selectedBoundaryGeometry={selectedBoundaryGeometry}
-            isFetchingCandidates={locationFetch.status === 'loading_candidates'}
-            isFetchingFull={locationFetch.status === 'loading_full'}
-            locationFetchMessage={locationFetch.message}
-            onTargetSelect={onTargetSelect}
-            onFetchLocation={onFetchLocation}
-            onCancelTarget={onCancelTarget}
-            onConfirmTarget={onConfirmTarget}
-            onTrackingNotice={onTrackingNotice}
-            onGeofenceBreach={onGeofenceBreach}
-            selectedTrackingDroneId={selectedTrackingDroneId}
-            onTrackingStateChange={onTrackingStateChange}
-            onTrackingControllerReady={onTrackingControllerReady}
-            hideTargetPopover={sidebarMode === 'osmEnclosing'}
-          />
-          <button
-            type="button"
-            className="absolute right-4 top-4 z-30 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-lg lg:hidden"
-            onClick={() => setMobileSidebarOpen(true)}
-          >
-            <PanelRightOpen className="size-3.5" />
-            Panel
-          </button>
-        </main>
+      <PanelGroup
+        direction="horizontal"
+        autoSaveId="appshell-main-sidebar"
+        className="h-full"
+      >
+        <Panel id="map" order={1} minSize={30} className="relative min-h-0">
+          <main className="relative h-full w-full">
+            {droneMap}
+            <button
+              type="button"
+              className="absolute right-4 top-4 z-30 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-lg lg:hidden"
+              onClick={() => setMobileSidebarOpen(true)}
+            >
+              <PanelRightOpen className="size-3.5" />
+              Panel
+            </button>
+          </main>
+        </Panel>
 
-        <aside
-          className={`relative hidden border-l border-slate-200 bg-slate-50 transition-[width] duration-200 ease-out lg:block ${
-            isDesktopCollapsed ? 'w-[22px]' : 'w-[380px] xl:w-[400px]'
-          }`}
-        >
-          <button
-            type="button"
-            className="absolute left-0 top-1/2 z-20 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
-            onClick={() => setDesktopSidebarCollapsed((current) => !current)}
-            aria-label={isDesktopCollapsed ? 'Open panel' : 'Collapse panel'}
-          >
-            {isDesktopCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-          </button>
-          {isDesktopCollapsed ? null : (
-            <div className="h-full overflow-hidden">{sidebarContent}</div>
-          )}
-        </aside>
-      </div>
+        {isDesktop ? (
+          <>
+            <PanelResizeHandle className="relative hidden w-1.5 bg-slate-200 outline-none transition-colors data-[resize-handle-state=drag]:bg-sky-400 data-[resize-handle-state=hover]:bg-sky-300 lg:block">
+              <button
+                type="button"
+                className="absolute left-0 top-1/2 z-20 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
+                onClick={toggleDesktopSidebar}
+                aria-label={desktopSidebarCollapsed ? 'Open panel' : 'Collapse panel'}
+              >
+                {desktopSidebarCollapsed ? <ChevronLeft className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              </button>
+            </PanelResizeHandle>
+            <Panel
+              id="sidebar"
+              order={2}
+              ref={sidebarPanelRef}
+              collapsible
+              collapsedSize={0}
+              defaultSize={26}
+              minSize={18}
+              maxSize={42}
+              onCollapse={() => setDesktopSidebarCollapsed(true)}
+              onExpand={() => setDesktopSidebarCollapsed(false)}
+              className="hidden border-l border-slate-200 bg-slate-50 lg:block"
+            >
+              <div className="h-full overflow-hidden">{sidebarContent}</div>
+            </Panel>
+          </>
+        ) : null}
+      </PanelGroup>
 
       {isMobileDrawerOpen ? (
         <div className="fixed inset-0 z-40 bg-slate-900/35 lg:hidden" onClick={() => setMobileSidebarOpen(false)}>
