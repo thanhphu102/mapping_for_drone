@@ -4,6 +4,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl'
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import type { ImperativePanelHandle } from 'react-resizable-panels'
+import * as Dialog from '@radix-ui/react-dialog'
 import { useMediaQuery } from '../../shared/hooks/useMediaQuery'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFeature } from './types'
 import {
@@ -1787,21 +1788,31 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         ) : null}
       </PanelGroup>
 
-      {mobileStructureOpen ? (
-        <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileStructureOpen(false)}>
-          <div className="absolute left-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
+      <Dialog.Root open={mobileStructureOpen} onOpenChange={setMobileStructureOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" />
+          <Dialog.Content
+            className="fixed inset-y-0 left-0 z-50 h-full w-[90vw] max-w-[360px] overflow-hidden bg-white shadow-xl outline-none lg:hidden"
+            aria-describedby={undefined}
+          >
+            <Dialog.Title className="sr-only">Project structure</Dialog.Title>
             {structurePanel}
-          </div>
-        </div>
-      ) : null}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
-      {mobileInspectorOpen ? (
-        <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileInspectorOpen(false)}>
-          <div className="absolute right-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
+      <Dialog.Root open={mobileInspectorOpen} onOpenChange={setMobileInspectorOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" />
+          <Dialog.Content
+            className="fixed inset-y-0 right-0 z-50 h-full w-[90vw] max-w-[360px] overflow-hidden bg-white shadow-xl outline-none lg:hidden"
+            aria-describedby={undefined}
+          >
+            <Dialog.Title className="sr-only">Inspector</Dialog.Title>
             {inspectorPanel}
-          </div>
-        </div>
-      ) : null}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   )
 }
