@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Feature, Geometry, MultiPolygon, Position } from 'geojson'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import { ArrowLeft, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import type { ImperativePanelHandle } from 'react-resizable-panels'
+import { useMediaQuery } from '../../shared/hooks/useMediaQuery'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFeature } from './types'
 import {
   createChildProject,
@@ -236,9 +239,20 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     readStoredEditorBackdropMode,
   )
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
-  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(true)
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
   const [mobileStructureOpen, setMobileStructureOpen] = useState(false)
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false)
+  const isDesktopLayout = useMediaQuery('(min-width: 1024px)')
+  const structurePanelRef = useRef<ImperativePanelHandle>(null)
+  const inspectorPanelRef = useRef<ImperativePanelHandle>(null)
+  const togglePanelCollapse = useCallback((panel: ImperativePanelHandle | null) => {
+    if (!panel) return
+    if (panel.isCollapsed()) {
+      panel.expand()
+    } else {
+      panel.collapse()
+    }
+  }, [])
   const [selectedFeatureIds, setSelectedFeatureIds] = useState<string[]>([])
   const [tagFilter, setTagFilter] = useState('')
   const [importPreviewFeatures, setImportPreviewFeatures] = useState<Feature[]>([])
@@ -1516,8 +1530,96 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     onBack()
   }, [map, onBack, project])
 
+  // Shared panel instances so the desktop docked panels and the mobile
+  // overlays render the exact same component with the same props.
+  const structurePanel = (
+    <EditorStructurePanel
+      project={project}
+      floors={floors}
+      selectedFloorId={selectedFloorId}
+      onSelectFloor={setSelectedFloorId}
+      selectedFeatureIds={selectedFeatureIds}
+      onSelectFeatureIds={setSelectedFeatureIds}
+      visibleFeatures={visibleFeatures}
+      tagFilter={tagFilter}
+      onTagFilterChange={setTagFilter}
+      floorsEnabled={floorsEnabled}
+      onToggleFloorsEnabled={handleToggleFloorsEnabled}
+      isTogglingFloors={isTogglingFloors}
+      onCreateFloor={handleCreateFloor}
+      isCreatingFloor={isCreatingFloor}
+      onUpdateFloor={handleUpdateFloor}
+      onDeleteFloor={handleDeleteFloor}
+      isUpdatingFloor={isUpdatingFloor}
+      importPreview={importPreview}
+      importError={importError}
+      importLoading={importLoading}
+      onPreviewImport={handlePreviewImport}
+      onCommitImport={handleCommitImport}
+      onUnpreviewImport={handleUnpreviewImport}
+    />
+  )
+
+  const inspectorPanel = (
+    <EditorSidebar
+      project={project}
+      projectConfig={projectConfig}
+      floors={floors}
+      selectedFloorId={selectedFloorId}
+      mapZoom={mapZoom}
+      mapReady={mapReady}
+      boundaryRendered={boundaryRendered}
+      backdropMode={backdropMode}
+      visibleFeatures={visibleFeatures}
+      draftFeature={draftCollection}
+      hoverCoordinate={hoverCoordinate}
+      snapPreview={snapPreview}
+      message={message}
+      selectedFeatures={selectedFeatures}
+      inspectorDraft={inspectorDraft}
+      onInspectorNameChange={setInspectorName}
+      onInspectorTagChange={setInspectorTag}
+      onInspectorNoteChange={setInspectorNoteText}
+      onInspectorFeatureTypeChange={setInspectorFeatureType}
+      onBackdropModeChange={setBackdropMode}
+      onSaveInspector={handleSaveInspector}
+      isSavingInspector={isSavingInspector}
+    />
+  )
+
   return (
     <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-100 text-slate-950">
+      <PanelGroup direction="horizontal" autoSaveId="spatial-editor-panels" className="h-full w-full">
+        {isDesktopLayout ? (
+          <>
+            <Panel
+              id="structure"
+              order={1}
+              ref={structurePanelRef}
+              collapsible
+              collapsedSize={0}
+              defaultSize={22}
+              minSize={14}
+              maxSize={34}
+              onCollapse={() => setLeftSidebarCollapsed(true)}
+              onExpand={() => setLeftSidebarCollapsed(false)}
+              className="hidden border-r border-slate-200 bg-white lg:block"
+            >
+              <div className="h-full overflow-hidden">{structurePanel}</div>
+            </Panel>
+            <PanelResizeHandle className="relative hidden w-1.5 bg-slate-200 outline-none transition-colors data-[resize-handle-state=drag]:bg-sky-400 data-[resize-handle-state=hover]:bg-sky-300 lg:block">
+              <button
+                type="button"
+                className="absolute right-0 top-1/2 z-30 flex h-14 w-6 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
+                onClick={() => togglePanelCollapse(structurePanelRef.current)}
+                aria-label={leftSidebarCollapsed ? 'Open project panel' : 'Collapse project panel'}
+              >
+                {leftSidebarCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
+              </button>
+            </PanelResizeHandle>
+          </>
+        ) : null}
+        <Panel id="map" order={2} minSize={40} className="relative min-w-0">
       <main className="drone-map relative flex h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-slate-200">
         <div
           ref={containerRef}
@@ -1652,121 +1754,43 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             <span className="font-medium text-slate-900">{project?.name}</span>
           </div>
         ) : null}
-        <aside className="absolute inset-y-0 left-0 z-30 hidden w-[324px] overflow-visible lg:block">
-          <div
-            className={`absolute inset-y-0 left-0 flex w-[324px] transform-gpu items-center justify-start will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-              leftSidebarCollapsed ? '-translate-x-[300px]' : 'translate-x-0'
-            }`}
-          >
-            <div className="h-full w-[300px] overflow-hidden rounded-r-2xl border-r border-slate-200 bg-white shadow-lg">
-              <EditorStructurePanel
-                project={project}
-                floors={floors}
-                selectedFloorId={selectedFloorId}
-                onSelectFloor={setSelectedFloorId}
-                selectedFeatureIds={selectedFeatureIds}
-                onSelectFeatureIds={setSelectedFeatureIds}
-                visibleFeatures={visibleFeatures}
-                tagFilter={tagFilter}
-                onTagFilterChange={setTagFilter}
-                floorsEnabled={floorsEnabled}
-                onToggleFloorsEnabled={handleToggleFloorsEnabled}
-                isTogglingFloors={isTogglingFloors}
-                onCreateFloor={handleCreateFloor}
-                isCreatingFloor={isCreatingFloor}
-                onUpdateFloor={handleUpdateFloor}
-                onDeleteFloor={handleDeleteFloor}
-                isUpdatingFloor={isUpdatingFloor}
-                importPreview={importPreview}
-                importError={importError}
-                importLoading={importLoading}
-                onPreviewImport={handlePreviewImport}
-                onCommitImport={handleCommitImport}
-                onUnpreviewImport={handleUnpreviewImport}
-              />
-            </div>
-            <button
-              type="button"
-              className="ml-[-1px] flex h-14 w-6 items-center justify-center rounded-r-full border border-slate-200 border-l-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
-              onClick={() => setLeftSidebarCollapsed((current) => !current)}
-              aria-label={leftSidebarCollapsed ? 'Open project panel' : 'Collapse project panel'}
-            >
-              {leftSidebarCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
-            </button>
-          </div>
-        </aside>
-        <aside className="absolute inset-y-0 right-0 z-30 hidden w-[344px] overflow-visible lg:block">
-          <div
-            className={`absolute inset-y-0 right-0 flex w-[344px] transform-gpu items-center justify-end will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-              rightSidebarCollapsed ? 'translate-x-[320px]' : 'translate-x-0'
-            }`}
-          >
-            <button
-              type="button"
-              className="mr-[-1px] flex h-14 w-6 items-center justify-center rounded-l-full border border-slate-200 border-r-0 bg-white text-slate-500 shadow-sm transition-colors duration-200 hover:border-sky-300 hover:text-sky-700"
-              onClick={() => setRightSidebarCollapsed((current) => !current)}
-              aria-label={rightSidebarCollapsed ? 'Open inspector panel' : 'Collapse inspector panel'}
-            >
-              {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
-            </button>
-            <div className="h-full w-[320px] overflow-hidden rounded-l-2xl border-l border-slate-200 bg-white shadow-lg">
-              <EditorSidebar
-                project={project}
-                projectConfig={projectConfig}
-                floors={floors}
-                selectedFloorId={selectedFloorId}
-                mapZoom={mapZoom}
-                mapReady={mapReady}
-                boundaryRendered={boundaryRendered}
-                backdropMode={backdropMode}
-                visibleFeatures={visibleFeatures}
-                draftFeature={draftCollection}
-                hoverCoordinate={hoverCoordinate}
-                snapPreview={snapPreview}
-                message={message}
-                selectedFeatures={selectedFeatures}
-                inspectorDraft={inspectorDraft}
-                onInspectorNameChange={setInspectorName}
-                onInspectorTagChange={setInspectorTag}
-                onInspectorNoteChange={setInspectorNoteText}
-                onInspectorFeatureTypeChange={setInspectorFeatureType}
-                onBackdropModeChange={setBackdropMode}
-                onSaveInspector={handleSaveInspector}
-                isSavingInspector={isSavingInspector}
-              />
-            </div>
-          </div>
-        </aside>
       </main>
+        </Panel>
+        {isDesktopLayout ? (
+          <>
+            <PanelResizeHandle className="relative hidden w-1.5 bg-slate-200 outline-none transition-colors data-[resize-handle-state=drag]:bg-sky-400 data-[resize-handle-state=hover]:bg-sky-300 lg:block">
+              <button
+                type="button"
+                className="absolute left-0 top-1/2 z-30 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700"
+                onClick={() => togglePanelCollapse(inspectorPanelRef.current)}
+                aria-label={rightSidebarCollapsed ? 'Open inspector panel' : 'Collapse inspector panel'}
+              >
+                {rightSidebarCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
+              </button>
+            </PanelResizeHandle>
+            <Panel
+              id="inspector"
+              order={3}
+              ref={inspectorPanelRef}
+              collapsible
+              collapsedSize={0}
+              defaultSize={24}
+              minSize={16}
+              maxSize={36}
+              onCollapse={() => setRightSidebarCollapsed(true)}
+              onExpand={() => setRightSidebarCollapsed(false)}
+              className="hidden border-l border-slate-200 bg-white lg:block"
+            >
+              <div className="h-full overflow-hidden">{inspectorPanel}</div>
+            </Panel>
+          </>
+        ) : null}
+      </PanelGroup>
 
       {mobileStructureOpen ? (
         <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileStructureOpen(false)}>
           <div className="absolute left-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
-            <EditorStructurePanel
-              project={project}
-              floors={floors}
-              selectedFloorId={selectedFloorId}
-              onSelectFloor={setSelectedFloorId}
-              selectedFeatureIds={selectedFeatureIds}
-              onSelectFeatureIds={setSelectedFeatureIds}
-              visibleFeatures={visibleFeatures}
-              tagFilter={tagFilter}
-              onTagFilterChange={setTagFilter}
-              floorsEnabled={floorsEnabled}
-              onToggleFloorsEnabled={handleToggleFloorsEnabled}
-              isTogglingFloors={isTogglingFloors}
-              onCreateFloor={handleCreateFloor}
-              isCreatingFloor={isCreatingFloor}
-              onUpdateFloor={handleUpdateFloor}
-              onDeleteFloor={handleDeleteFloor}
-              isUpdatingFloor={isUpdatingFloor}
-              importPreview={importPreview}
-              importError={importError}
-              importLoading={importLoading}
-              onPreviewImport={handlePreviewImport}
-              onCommitImport={handleCommitImport}
-              onUnpreviewImport={handleUnpreviewImport}
-            />
+            {structurePanel}
           </div>
         </div>
       ) : null}
@@ -1774,30 +1798,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       {mobileInspectorOpen ? (
         <div className="fixed inset-0 z-50 bg-slate-900/35 lg:hidden" onClick={() => setMobileInspectorOpen(false)}>
           <div className="absolute right-0 top-0 h-full w-[90vw] max-w-[360px]" onClick={(event) => event.stopPropagation()}>
-            <EditorSidebar
-              project={project}
-              projectConfig={projectConfig}
-              floors={floors}
-              selectedFloorId={selectedFloorId}
-              mapZoom={mapZoom}
-              mapReady={mapReady}
-              boundaryRendered={boundaryRendered}
-              backdropMode={backdropMode}
-              visibleFeatures={visibleFeatures}
-              draftFeature={draftCollection}
-              hoverCoordinate={hoverCoordinate}
-              snapPreview={snapPreview}
-              message={message}
-              selectedFeatures={selectedFeatures}
-              inspectorDraft={inspectorDraft}
-              onInspectorNameChange={setInspectorName}
-              onInspectorTagChange={setInspectorTag}
-              onInspectorNoteChange={setInspectorNoteText}
-              onInspectorFeatureTypeChange={setInspectorFeatureType}
-              onBackdropModeChange={setBackdropMode}
-              onSaveInspector={handleSaveInspector}
-              isSavingInspector={isSavingInspector}
-            />
+            {inspectorPanel}
           </div>
         </div>
       ) : null}
