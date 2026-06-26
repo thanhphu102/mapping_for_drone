@@ -49,14 +49,18 @@ describe('ErrorBoundary', () => {
     vi.restoreAllMocks()
   })
 
-  it('logs the caught error via console.error', () => {
+  it('logs the caught error via the scoped logging facade', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     render(
       <ErrorBoundary>
         <Bomb shouldThrow={true} />
       </ErrorBoundary>,
     )
-    expect(consoleErrorSpy).toHaveBeenCalledWith('Unhandled render error:', expect.any(Error), expect.anything())
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[ErrorBoundary] Unhandled render error:',
+      expect.any(Error),
+      expect.anything(),
+    )
     vi.restoreAllMocks()
   })
 

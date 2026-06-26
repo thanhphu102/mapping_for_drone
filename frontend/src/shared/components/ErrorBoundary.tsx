@@ -1,6 +1,9 @@
 import { Component } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
+import { createLogger } from '../logging/logger'
+
+const logger = createLogger('ErrorBoundary')
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -20,7 +23,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Unhandled render error:', error, errorInfo)
+    logger.error('Unhandled render error:', error, errorInfo)
   }
 
   handleRetry = () => {
