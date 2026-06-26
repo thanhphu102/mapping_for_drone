@@ -1,6 +1,7 @@
 import {
   Ban,
   Box,
+  ChevronDown,
   Circle,
   Hand,
   LassoSelect,
@@ -8,9 +9,11 @@ import {
   PenTool,
   Pentagon,
   Route,
+  Shapes,
   Triangle,
   Type,
 } from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { featureTypeForMode, type DrawMode } from '../hooks/useDrawingEngine'
 
 interface ToolConfig {
@@ -70,8 +73,8 @@ export function EditorToolbox({
     tool.group === 'draw'
       ? mode === tool.mode && activeFeatureType === toolFeatureType(tool)
       : mode === tool.mode
-  const activeTool =
-    PRIMARY_TOOLS.find(isToolActive) ?? SHAPE_TOOLS.find(isToolActive)
+  const activeShapeTool = SHAPE_TOOLS.find(isToolActive)
+  const activeTool = PRIMARY_TOOLS.find(isToolActive) ?? activeShapeTool
 
   return (
     <div className="pointer-events-auto absolute bottom-5 left-1/2 z-40 w-fit max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
@@ -81,8 +84,7 @@ export function EditorToolbox({
         </span>
         <span className="pr-1 text-slate-400">Draw</span>
       </div>
-      <div className="max-w-full overflow-x-auto overflow-y-visible">
-        <div className="flex w-max min-w-full items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {PRIMARY_TOOLS.map((tool, index) => {
           const Icon = tool.icon
           const isActive = isToolActive(tool)
@@ -116,36 +118,57 @@ export function EditorToolbox({
             </div>
           )
         })}
-          <span className="mx-0.5 h-7 w-px bg-slate-200" aria-hidden="true" />
-          {SHAPE_TOOLS.map((tool) => {
-            const Icon = tool.icon
-            const isActive = isToolActive(tool)
-            const isDisabled = !toolsEnabled || isSaving || floorBlocked
-            return (
-              <button
-                key={`${tool.mode}:${tool.featureType ?? ''}`}
-                type="button"
-                className={`group relative flex h-11 min-w-11 items-center justify-center rounded-xl border transition ${
-                  isActive
-                    ? 'border-sky-500 bg-sky-500 text-white'
-                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950'
-                } disabled:cursor-not-allowed disabled:opacity-45`}
-                onClick={() => {
-                  onSetMode(tool.mode, tool.featureType ?? null)
-                  if (tool.mode !== mode || activeFeatureType !== toolFeatureType(tool)) onClearDraft()
-                }}
-                disabled={isDisabled}
-                title={`${tool.label} (${tool.shortcut})`}
-                aria-label={tool.label}
-              >
-                <Icon className="size-4" aria-hidden="true" />
-                <span className="pointer-events-none absolute -top-11 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-800 shadow-lg group-hover:block">
-                  {tool.label} · {tool.shortcut}
-                </span>
-              </button>
-            )
-          })}
-        </div>
+        <span className="mx-0.5 h-7 w-px bg-slate-200" aria-hidden="true" />
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              type="button"
+              className={`flex h-11 items-center gap-1.5 rounded-xl border px-3 transition ${
+                activeShapeTool
+                  ? 'border-sky-500 bg-sky-500 text-white'
+                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950'
+              } disabled:cursor-not-allowed disabled:opacity-45`}
+              disabled={!toolsEnabled || isSaving || floorBlocked}
+              title="Shapes"
+              aria-label="Shapes"
+            >
+              <Shapes className="size-4" aria-hidden="true" />
+              <span className="whitespace-nowrap text-xs font-medium">
+                {activeShapeTool?.label ?? 'Shapes'}
+              </span>
+              <ChevronDown className="size-3.5" aria-hidden="true" />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="top"
+              align="end"
+              sideOffset={8}
+              className="z-50 min-w-[180px] rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"
+            >
+              {SHAPE_TOOLS.map((tool) => {
+                const Icon = tool.icon
+                const isActive = isToolActive(tool)
+                return (
+                  <DropdownMenu.Item
+                    key={`${tool.mode}:${tool.featureType ?? ''}`}
+                    className={`flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition data-[highlighted]:bg-slate-100 ${
+                      isActive ? 'font-semibold text-sky-700' : 'text-slate-700'
+                    }`}
+                    onSelect={() => {
+                      onSetMode(tool.mode, tool.featureType ?? null)
+                      if (tool.mode !== mode || activeFeatureType !== toolFeatureType(tool)) onClearDraft()
+                    }}
+                  >
+                    <Icon className="size-4" aria-hidden="true" />
+                    <span className="flex-1">{tool.label}</span>
+                    <span className="text-[11px] text-slate-400">{tool.shortcut}</span>
+                  </DropdownMenu.Item>
+                )
+              })}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
       {floorBlocked ? (
         <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-700">
