@@ -170,7 +170,7 @@ export async function fetchEnclosingOsmElements(
   const timeoutId = window.setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS)
   const abortFromCaller = () => controller.abort()
   options?.signal?.addEventListener('abort', abortFromCaller)
-  let data: OverpassResponse | null = null
+  let data: OverpassResponse | null
   try {
     const response = await fetch(
       `/api/osm/enclosing?lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lon))}`,
