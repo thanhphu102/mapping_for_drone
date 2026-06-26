@@ -1,4 +1,4 @@
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { Info, Save } from 'lucide-react'
 import type { Feature, Position } from 'geojson'
@@ -36,7 +36,7 @@ interface EditorSidebarProps {
   isSavingInspector: boolean
 }
 
-export function EditorSidebar({
+export const EditorSidebar = memo(function EditorSidebar({
   project,
   projectConfig,
   floors,
@@ -229,4 +229,4 @@ export function EditorSidebar({
       </Tabs.Root>
     </aside>
   )
-}
+})

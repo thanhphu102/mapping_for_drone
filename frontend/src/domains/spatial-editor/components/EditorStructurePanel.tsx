@@ -1,7 +1,7 @@
 import { Building2, Layers3, Search } from 'lucide-react'
 import type { Feature } from 'geojson'
 import type { DrawingProject, SpatialFloor } from '../types'
-import { useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ImportScanJsonPanel } from './ImportScanJsonPanel'
 import type { ImportPolygonPayload, ImportScanPreviewResponse } from '../services/imports'
@@ -42,7 +42,7 @@ function featureTag(feature: Feature) {
   return typeof props.tag === 'string' ? props.tag : ''
 }
 
-export function EditorStructurePanel({
+export const EditorStructurePanel = memo(function EditorStructurePanel({
   project,
   floors,
   selectedFloorId,
@@ -316,4 +316,4 @@ export function EditorStructurePanel({
       </section>
     </aside>
   )
-}
+})
