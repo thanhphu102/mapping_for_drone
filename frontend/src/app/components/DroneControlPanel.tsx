@@ -1,3 +1,4 @@
+import * as Tabs from '@radix-ui/react-tabs'
 import { DroneTable } from '../../domains/drone/components/DroneTable'
 import { DroneTrackingControls } from '../../domains/tracking/components/DroneTrackingControls'
 import { StatusStrip } from '../../domains/drone/components/StatusStrip'
@@ -60,80 +61,110 @@ export function DroneControlPanel({
   onClearTracking,
 }: DroneControlPanelProps) {
   return (
-    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-      <StatusStrip
-        connectionStatus={connectionStatus}
-        connectionMessage={connectionMessage}
-        connectedCount={connectedCount}
-        averageBattery={averageBattery}
-        commandStatus={commandStatus}
-      />
-
-      <section aria-labelledby="drone-table-heading">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <h2
-              id="drone-table-heading"
-              className="text-sm font-semibold text-slate-950"
-            >
-              Drones
-            </h2>
-            <p className="text-sm text-slate-500">
-              Select a drone to track or review.
-            </p>
-          </div>
-          <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-            Live
-          </span>
-        </div>
-
-        <DroneTable
-          drones={connectedDrones}
-          isTelemetryOpen={connectionStatus === 'open'}
-          selectedTrackingDroneId={selectedTrackingDroneId}
-          onSelectTrackingDrone={onSelectTrackingDrone}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Glanceable connection/battery status stays visible above the tabs. */}
+      <div className="shrink-0 border-b border-slate-200 p-4 pb-3">
+        <StatusStrip
+          connectionStatus={connectionStatus}
+          connectionMessage={connectionMessage}
+          connectedCount={connectedCount}
+          averageBattery={averageBattery}
+          commandStatus={commandStatus}
         />
-      </section>
+      </div>
 
-      <DroneTrackingControls
-        selectedDroneId={selectedTrackingDroneId}
-        status={trackingState.status}
-        pointsCount={trackingState.pointsCount}
-        maxPoints={trackingState.maxPoints}
-        canSave={trackingState.canSave}
-        isSaving={trackingState.isSaving}
-        onStart={onStartTracking}
-        onStop={onStopTracking}
-        onSave={onSaveTrackingRoute}
-        onClear={onClearTracking}
-      />
-
-      <details className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <summary className="cursor-pointer text-sm font-semibold text-slate-900">
-          Status details
-        </summary>
-        <section
-          className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3"
-          aria-live="polite"
+      <Tabs.Root defaultValue="drones" className="flex min-h-0 flex-1 flex-col">
+        <Tabs.List
+          className="flex shrink-0 gap-1 border-b border-slate-200 px-3 pt-2"
+          aria-label="Drone control sections"
         >
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold text-slate-950">
-              Command
-            </h2>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold capitalize text-slate-600">
-              {commandStatusLabel(commandStatus)}
-            </span>
-          </div>
-          <p className="mt-2 text-sm text-slate-600">
-            {commandMessage}
-          </p>
-          {locationSelectionMessage ? (
-            <p className="mt-2 text-sm font-medium text-emerald-700">
-              {locationSelectionMessage}
+          {(['drones', 'tracking', 'status'] as const).map((value) => (
+            <Tabs.Trigger
+              key={value}
+              value={value}
+              className="rounded-t-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 outline-none transition hover:text-slate-800 focus-visible:ring-2 focus-visible:ring-sky-400 data-[state=active]:border-b-2 data-[state=active]:border-sky-500 data-[state=active]:text-sky-700"
+            >
+              {value}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+
+        <Tabs.Content
+          value="drones"
+          className="min-h-0 flex-1 overflow-y-auto p-4 outline-none"
+        >
+          <section aria-labelledby="drone-table-heading">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2
+                  id="drone-table-heading"
+                  className="text-sm font-semibold text-slate-950"
+                >
+                  Drones
+                </h2>
+                <p className="text-sm text-slate-500">
+                  Select a drone to track or review.
+                </p>
+              </div>
+              <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                Live
+              </span>
+            </div>
+
+            <DroneTable
+              drones={connectedDrones}
+              isTelemetryOpen={connectionStatus === 'open'}
+              selectedTrackingDroneId={selectedTrackingDroneId}
+              onSelectTrackingDrone={onSelectTrackingDrone}
+            />
+          </section>
+        </Tabs.Content>
+
+        <Tabs.Content
+          value="tracking"
+          className="min-h-0 flex-1 overflow-y-auto p-4 outline-none"
+        >
+          <DroneTrackingControls
+            selectedDroneId={selectedTrackingDroneId}
+            status={trackingState.status}
+            pointsCount={trackingState.pointsCount}
+            maxPoints={trackingState.maxPoints}
+            canSave={trackingState.canSave}
+            isSaving={trackingState.isSaving}
+            onStart={onStartTracking}
+            onStop={onStopTracking}
+            onSave={onSaveTrackingRoute}
+            onClear={onClearTracking}
+          />
+        </Tabs.Content>
+
+        <Tabs.Content
+          value="status"
+          className="min-h-0 flex-1 overflow-y-auto p-4 outline-none"
+        >
+          <section
+            className="rounded-md border border-slate-200 bg-slate-50 p-3"
+            aria-live="polite"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-950">
+                Command
+              </h2>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold capitalize text-slate-600">
+                {commandStatusLabel(commandStatus)}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              {commandMessage}
             </p>
-          ) : null}
-        </section>
-      </details>
+            {locationSelectionMessage ? (
+              <p className="mt-2 text-sm font-medium text-emerald-700">
+                {locationSelectionMessage}
+              </p>
+            ) : null}
+          </section>
+        </Tabs.Content>
+      </Tabs.Root>
     </div>
   )
 }
