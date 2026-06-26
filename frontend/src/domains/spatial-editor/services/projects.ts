@@ -17,7 +17,7 @@ export async function fetchOsmElementGeometry(
     throw new Error('OSM geometry response is empty')
   }
 
-  if (!data.geometry || !data.editorMode) {
+  if (!data.geometry) {
     throw new Error('OSM geometry response is incomplete')
   }
 
@@ -28,13 +28,11 @@ export async function createDrawingProjectFromOsm(
   osmType: OsmElementType,
   osmId: number,
   options?: {
-    editorModeOverride?: string
     confirmedLargeArea?: boolean
   },
 ): Promise<{
   projectId: string
   project: DrawingProject
-  editorMode: string
   warnings: string[]
 }> {
   const response = await fetch('/api/drawing-projects/from-osm', {
@@ -45,7 +43,6 @@ export async function createDrawingProjectFromOsm(
     body: JSON.stringify({
       osmType,
       osmId,
-      editorModeOverride: options?.editorModeOverride,
       confirmedLargeArea: options?.confirmedLargeArea,
     }),
   })
@@ -83,7 +80,6 @@ export async function createDrawingProjectFromOsm(
   return data as {
     projectId: string
     project: DrawingProject
-    editorMode: string
     warnings: string[]
   }
 }
@@ -146,7 +142,6 @@ export async function createSpatialProjectFromGeometry(
   payload: {
     name: string
     geometry: Polygon | MultiPolygon
-    editorMode: string
   },
 ): Promise<{ projectId: string; project: DrawingProject }> {
   const response = await fetch('/api/spatial-projects/from-geometry', {
@@ -161,7 +156,6 @@ export async function importSpatialProjectGeoJson(
   payload: {
     name: string
     geojson: Feature | FeatureCollection | Polygon | MultiPolygon
-    editorMode?: string
   },
 ): Promise<{ projectId: string; project: DrawingProject }> {
   const response = await fetch('/api/spatial-projects/import-geojson', {
@@ -175,7 +169,7 @@ export async function importSpatialProjectGeoJson(
 export async function createChildProject(
   projectId: string,
   featureId: string,
-  options?: { name?: string; editorMode?: 'building' | 'indoor' },
+  options?: { name?: string },
 ): Promise<{ childProjectId: string; project: DrawingProject }> {
   const response = await fetch(
     `/api/drawing-projects/${projectId}/features/${featureId}/create-child-project`,
@@ -186,6 +180,21 @@ export async function createChildProject(
     },
   )
   return readJsonResponse<{ childProjectId: string; project: DrawingProject }>(response)
+}
+
+export async function setFloorsEnabled(
+  projectId: string,
+  floorsEnabled: boolean,
+): Promise<{ project: DrawingProject }> {
+  const response = await fetch(
+    `/api/drawing-projects/${projectId}/floors-enabled`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ floorsEnabled }),
+    },
+  )
+  return readJsonResponse<{ project: DrawingProject }>(response)
 }
 
 export async function fetchChildProjects(

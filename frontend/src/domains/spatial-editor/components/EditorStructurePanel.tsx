@@ -15,6 +15,9 @@ interface EditorStructurePanelProps {
   visibleFeatures: Feature[]
   tagFilter: string
   onTagFilterChange: (value: string) => void
+  floorsEnabled: boolean
+  onToggleFloorsEnabled: (enabled: boolean) => void
+  isTogglingFloors: boolean
   onCreateFloor: () => void
   isCreatingFloor: boolean
   onUpdateFloor: (floor: SpatialFloor, updates: Partial<Pick<SpatialFloor, 'label' | 'code'>>) => void
@@ -48,6 +51,9 @@ export function EditorStructurePanel({
   visibleFeatures,
   tagFilter,
   onTagFilterChange,
+  floorsEnabled,
+  onToggleFloorsEnabled,
+  isTogglingFloors,
   onCreateFloor,
   isCreatingFloor,
   onUpdateFloor,
@@ -82,10 +88,34 @@ export function EditorStructurePanel({
       </header>
 
       <section className="border-b border-slate-200 px-5 py-4">
-        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-          <Layers3 className="size-3.5" />
-          Floors
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <Layers3 className="size-3.5" />
+            Floors
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={floorsEnabled}
+            disabled={!project || isTogglingFloors}
+            onClick={() => onToggleFloorsEnabled(!floorsEnabled)}
+            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition disabled:opacity-50 ${
+              floorsEnabled ? 'bg-sky-500' : 'bg-slate-300'
+            }`}
+            title={floorsEnabled ? 'Disable floors' : 'Enable floors'}
+          >
+            <span
+              className={`inline-block size-4 transform rounded-full bg-white shadow transition ${
+                floorsEnabled ? 'translate-x-4' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
         </div>
+        {!floorsEnabled ? (
+          <p className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-500">
+            Floors are off. Enable to manage multiple levels for this project.
+          </p>
+        ) : (
         <div className="space-y-1">
           <button
             type="button"
@@ -201,6 +231,7 @@ export function EditorStructurePanel({
             })
           )}
         </div>
+        )}
       </section>
 
       <details className="border-b border-slate-200 px-5 py-4">

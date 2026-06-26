@@ -6,7 +6,6 @@ import {
   Send,
   Plus,
 } from 'lucide-react'
-import type { EditorMode } from '../types'
 import type { DrawMode } from '../hooks/useDrawingEngine'
 
 interface EditorToolbarProps {
@@ -14,7 +13,7 @@ interface EditorToolbarProps {
   isSaving: boolean
   hasPendingChanges: boolean
   hasSavableDraft: boolean
-  project: { id: string; editorMode: EditorMode } | null
+  project: { id: string } | null
   canDrawOnFloor: boolean
   onSetMode: (mode: DrawMode) => void
   onClearDraft: () => void

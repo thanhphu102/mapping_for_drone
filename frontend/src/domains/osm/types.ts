@@ -1,5 +1,4 @@
 import type { MultiPolygon } from 'geojson'
-import type { EditorMode } from '../spatial-editor/types'
 
 export type OsmElementType = 'way' | 'relation'
 
@@ -31,25 +30,16 @@ export interface OsmCandidate {
   category: string
 }
 
-export interface EnclosingSpaceClassification {
-  editorMode: EditorMode
-  confidence: number
-  reason: string
-  warnings: string[]
-  requiresConfirmation: boolean
-}
-
 export interface OsmElementGeometryResponse {
   osmType: OsmElementType
   osmId: number
   tags: OsmTags
   geometry: MultiPolygon
-  editorMode: EditorMode
-  classification: EnclosingSpaceClassification
   bbox: [number, number, number, number]
   areaSquareKm: number
   areaM2: number
   perimeterM: number
   pointCount: number
   warnings: string[]
+  requiresConfirmation: boolean
 }

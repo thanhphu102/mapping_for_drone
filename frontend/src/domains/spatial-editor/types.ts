@@ -1,15 +1,6 @@
 import type { Feature, MultiPolygon } from 'geojson'
 import type { OsmElementType, OsmTags } from '../osm/types'
 
-export type EditorMode =
-  | 'region'
-  | 'campus'
-  | 'agriculture'
-  | 'building'
-  | 'indoor'
-  | 'parking'
-  | 'custom'
-
 export type ProjectSource = 'openstreetmap' | 'manual' | 'imported'
 
 export type ProjectStatus = 'draft' | 'published' | 'archived'
@@ -30,7 +21,6 @@ export interface SpatialObject {
   id: string
   name: string
   sourceKey?: string
-  mode?: EditorMode
   floors: SpatialFloor[]
 }
 
@@ -83,7 +73,7 @@ export interface DrawingProject {
   osmType: OsmElementType | null
   osmId: number | null
   osmTags: OsmTags
-  editorMode: EditorMode
+  floorsEnabled: boolean
   baseGeometry: MultiPolygon
   bbox: [number, number, number, number]
   areaSquareKm: number

@@ -21,7 +21,6 @@ import type {
   OsmElementGeometryResponse,
 } from '../domains/osm/types'
 import type { Geometry } from 'geojson'
-import type { EditorMode } from '../domains/spatial-editor/types'
 import type { SaveTrackedRouteResponse } from '../domains/tracking/types'
 
 interface AppShellProps {
@@ -38,7 +37,6 @@ interface AppShellProps {
   sidebarMode: SidebarMode
   locationFetch: LocationFetchState
   locationSelectionMessage: string | null
-  editorModeOverride: EditorMode | null
   isOpeningEditor: boolean
   confirmedLargeArea: boolean
   selectedBoundaryGeometry: Geometry | null
@@ -62,7 +60,6 @@ interface AppShellProps {
   ) => void
   onHoverCandidate: (candidate: OsmCandidate | null) => void
   onSelectCandidate: (candidate: OsmCandidate) => void
-  onChangeEditorMode: (mode: EditorMode | null) => void
   onOpenSpatialEditor: () => void
   onCloseOsmPanel: () => void
   onSelectTrackingDrone: (droneId: string) => void
@@ -103,7 +100,6 @@ export function AppShell({
   sidebarMode,
   locationFetch,
   locationSelectionMessage,
-  editorModeOverride,
   isOpeningEditor,
   confirmedLargeArea,
   selectedBoundaryGeometry,
@@ -120,7 +116,6 @@ export function AppShell({
   onTrackingControllerReady,
   onHoverCandidate,
   onSelectCandidate,
-  onChangeEditorMode,
   onOpenSpatialEditor,
   onCloseOsmPanel,
   onSelectTrackingDrone,
@@ -143,13 +138,11 @@ export function AppShell({
       selectedCandidate={locationFetch.selectedCandidate}
       highlightedCandidate={locationFetch.highlightedCandidate}
       selectedGeometry={locationFetch.selectedGeometry as OsmElementGeometryResponse | null}
-      selectedEditorMode={editorModeOverride}
       status={locationFetch.message}
       isOpeningEditor={isOpeningEditor}
       confirmedLargeArea={confirmedLargeArea}
       onHoverCandidate={onHoverCandidate}
       onSelectCandidate={onSelectCandidate}
-      onChangeEditorMode={onChangeEditorMode}
       onOpenSpatialEditor={onOpenSpatialEditor}
       onClose={onCloseOsmPanel}
     />

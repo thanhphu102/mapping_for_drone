@@ -5,7 +5,6 @@ import {
   fetchDrawingProjects,
   fetchOsmElementGeometry,
 } from '../../spatial-editor/services/projects'
-import type { EditorMode } from '../../spatial-editor/types'
 import { fetchEnclosingOsmElements } from '../services/osm'
 import type { OsmCandidate, OsmElementGeometryResponse } from '../types'
 import { openSpatialEditorRoute } from '../../../app/routes'
@@ -71,7 +70,6 @@ export function useOsmSelectionFlow() {
     useState<string | null>(null)
   const [lastFetchedCoordinate, setLastFetchedCoordinate] = useState<TargetCoordinate | null>(null)
   const [isOpeningEditor, setIsOpeningEditor] = useState(false)
-  const [editorModeOverride, setEditorModeOverride] = useState<EditorMode | null>(null)
   const [confirmedLargeArea, setConfirmedLargeArea] = useState(false)
   const fetchCandidatesAbortRef = useRef<AbortController | null>(null)
   const fetchCandidatesRequestIdRef = useRef(0)
@@ -86,7 +84,6 @@ export function useOsmSelectionFlow() {
 
   const resetForTargetSelection = useCallback(() => {
     resetLocationPanel()
-    setEditorModeOverride(null)
     setConfirmedLargeArea(false)
   }, [resetLocationPanel])
 
@@ -97,7 +94,6 @@ export function useOsmSelectionFlow() {
 
     setSidebarMode('osmEnclosing')
     setLocationSelectionMessage(null)
-    setEditorModeOverride(null)
     setConfirmedLargeArea(false)
     setRawSelectedGeometry(null)
 
@@ -203,8 +199,7 @@ export function useOsmSelectionFlow() {
 
     try {
       const selectedGeometry = await fetchOsmElementGeometry(candidate.type, candidate.id)
-      const nextEditorMode = selectedGeometry?.editorMode
-      if (!nextEditorMode) {
+      if (!selectedGeometry?.geometry) {
         throw new Error('OSM geometry response is incomplete')
       }
 
@@ -219,7 +214,6 @@ export function useOsmSelectionFlow() {
           text: `Selected ${candidate.type} ${candidate.id}. Boundary preview is ready.`,
         },
       }))
-      setEditorModeOverride(nextEditorMode)
       setConfirmedLargeArea(false)
     } catch (error) {
       const message =
@@ -273,7 +267,6 @@ export function useOsmSelectionFlow() {
         candidate.type,
         candidate.id,
         {
-          editorModeOverride: editorModeOverride ?? undefined,
           confirmedLargeArea,
         },
       )
@@ -300,11 +293,10 @@ export function useOsmSelectionFlow() {
     } finally {
       setIsOpeningEditor(false)
     }
-  }, [confirmedLargeArea, editorModeOverride, locationFetch.selectedCandidate])
+  }, [confirmedLargeArea, locationFetch.selectedCandidate])
 
   const handleCloseOsmPanel = useCallback(() => {
     resetLocationPanel()
-    setEditorModeOverride(null)
     setConfirmedLargeArea(false)
   }, [resetLocationPanel])
 
@@ -316,7 +308,6 @@ export function useOsmSelectionFlow() {
     sidebarMode,
     locationSelectionMessage,
     isOpeningEditor,
-    editorModeOverride,
     confirmedLargeArea,
     selectedBoundaryGeometry,
     isFetchingCandidates: locationFetch.status === 'loading_candidates',
@@ -328,6 +319,5 @@ export function useOsmSelectionFlow() {
     handleCandidateSelect,
     handleOpenSpatialEditor,
     handleCloseOsmPanel,
-    setEditorModeOverride,
   }
 }

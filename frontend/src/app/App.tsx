@@ -89,7 +89,6 @@ function App() {
       sidebarMode={osmFlow.sidebarMode}
       locationFetch={osmFlow.locationFetch}
       locationSelectionMessage={osmFlow.locationSelectionMessage}
-      editorModeOverride={osmFlow.editorModeOverride}
       isOpeningEditor={osmFlow.isOpeningEditor}
       confirmedLargeArea={osmFlow.confirmedLargeArea}
       selectedBoundaryGeometry={osmFlow.selectedBoundaryGeometry}
@@ -106,7 +105,6 @@ function App() {
       onTrackingControllerReady={trackingFlow.handleTrackingControllerReady}
       onHoverCandidate={osmFlow.handleCandidateHover}
       onSelectCandidate={osmFlow.handleCandidateSelect}
-      onChangeEditorMode={osmFlow.setEditorModeOverride}
       onOpenSpatialEditor={osmFlow.handleOpenSpatialEditor}
       onCloseOsmPanel={osmFlow.handleCloseOsmPanel}
       onSelectTrackingDrone={trackingFlow.handleSelectDroneForTracking}

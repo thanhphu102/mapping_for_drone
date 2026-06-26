@@ -6,13 +6,13 @@ import type { DrawingProject, ProjectCanvasConfig, SpatialFeature } from './type
 import {
   createChildProject,
   fetchDrawingProject,
+  setFloorsEnabled,
 } from './services/projects'
 import {
   deleteDrawingFeature,
   fetchProjectVisibleFeatures,
   saveDrawingFeature,
 } from './services/features'
-import { createProjectFloor } from './services/floors'
 import { MapProvider, useMapContext } from './components/MapProvider'
 import { EditorToolbar } from './components/EditorToolbar'
 import { EditorToolbox } from './components/EditorToolbox'
@@ -322,9 +322,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   })
 
   const hasFloors = floors.length > 0
-  const floorRequired = project?.editorMode === 'building' || project?.editorMode === 'indoor'
-  const canShowFloorSelector = Boolean(floorRequired || hasFloors)
-  const canDrawOnFloor = !floorRequired || Boolean(selectedFloorId)
+  const floorsEnabled = Boolean(project?.floorsEnabled)
+  const canShowFloorSelector = Boolean(floorsEnabled || hasFloors)
+  const canDrawOnFloor = !floorsEnabled || Boolean(selectedFloorId)
 
   const visibleFeatures = useMemo(() => {
     const deleted = new Set(pendingDeletedFeatureIds)
@@ -865,7 +865,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
   const selectedBuildingFeature = useMemo(() => {
     if (!project || selectedFeatures.length !== 1) return null
     const target = selectedFeatures[0]
-    return project.editorMode === 'campus' && target.geometry.type === 'Polygon' ? target : null
+    return target.geometry.type === 'Polygon' ? target : null
   }, [project, selectedFeatures])
 
   const handleSaveInspector = useCallback(async () => {
@@ -1223,42 +1223,18 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
         if (!isMountedRef.current || abortController.signal.aborted) {
           return
         }
-        let loadedProject = nextProject
-        const shouldCreateDefaultFloor =
-          (nextProject.editorMode === 'building' || nextProject.editorMode === 'indoor') &&
-          nextProject.floors.length === 0
-        if (shouldCreateDefaultFloor) {
-          setMessage('Creating default floor...')
-          try {
-            const floorResponse = await createProjectFloor(nextProject.id, {
-              label: 'F1',
-              code: 'F1',
-              level: 1,
-              sortOrder: 0,
-            })
-            if (!isMountedRef.current || abortController.signal.aborted) return
-            loadedProject = { ...nextProject, floors: floorResponse.floors }
-            setSelectedFloorId(floorResponse.floor.id)
-            setMessage('Default floor created')
-          } catch (floorError) {
-            if (isMountedRef.current && !abortController.signal.aborted) {
-              setMessage(floorError instanceof Error ? floorError.message : 'Default floor creation failed')
-            }
-          }
-        } else if (nextProject.floors.length > 0) {
+        if (nextProject.floors.length > 0) {
           setSelectedFloorId(nextProject.floors[0].id)
         } else {
           setSelectedFloorId(null)
         }
-        setProject(loadedProject)
+        setProject(nextProject)
         setServerFeatures([])
         setPendingCreatedFeatures([])
         setPendingUpdatedFeatures({})
         setPendingDeletedFeatureIds([])
         setShowFloorSelector(false)
-        if (!shouldCreateDefaultFloor) {
-          setMessage('Project data loaded')
-        }
+        setMessage('Project data loaded')
       } catch (error) {
         if (!isMountedRef.current || abortController.signal.aborted) {
           return
@@ -1435,6 +1411,32 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
     setSelectedFeatureIds([])
   }, [project])
 
+  const [isTogglingFloors, setIsTogglingFloors] = useState(false)
+  const handleToggleFloorsEnabled = useCallback(async (enabled: boolean) => {
+    if (!project || isTogglingFloors) return
+    setIsTogglingFloors(true)
+    setMessage(enabled ? 'Enabling floors...' : 'Disabling floors...')
+    try {
+      const response = await setFloorsEnabled(project.id, enabled)
+      if (!isMountedRef.current) return
+      setProject(response.project)
+      if (!enabled) {
+        setSelectedFloorId(null)
+      } else if (response.project.floors.length > 0) {
+        setSelectedFloorId(response.project.floors[0].id)
+      }
+      setMessage(enabled ? 'Floors enabled' : 'Floors disabled')
+    } catch (error) {
+      if (isMountedRef.current) {
+        setMessage(error instanceof Error ? error.message : 'Failed to update floors setting')
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsTogglingFloors(false)
+      }
+    }
+  }, [project, isTogglingFloors, setMessage, setSelectedFloorId])
+
   const handleCreateChildProject = useCallback(async () => {
     if (!project || !selectedBuildingFeature || !isMountedRef.current) return
     const featureId = selectedBuildingFeature.id as string | undefined
@@ -1443,10 +1445,8 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
       return
     }
     try {
-      setMessage('Creating indoor project...')
-      const response = await createChildProject(project.id, featureId, {
-        editorMode: 'indoor',
-      })
+      setMessage('Creating child project...')
+      const response = await createChildProject(project.id, featureId)
       if (isMountedRef.current) {
         setProjectStack((stack) => [...stack, { id: project.id, name: project.name }])
         setActiveProjectId(response.childProjectId)
@@ -1579,7 +1579,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
           activeFeatureType={activeFeatureType}
           toolsEnabled={toolsEnabled}
           isSaving={isSaving || publishing}
-          floorRequired={Boolean(floorRequired)}
+          floorRequired={floorsEnabled}
           hasFloorSelection={Boolean(selectedFloorId)}
           onSetMode={handleSetMode}
           onClearDraft={() => setDraftPoints([])}
@@ -1619,7 +1619,7 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
             selectedFloorId={selectedFloorId}
             onSelectFloor={setSelectedFloorId}
             onCreateFloor={handleCreateFloor}
-            isRequired={Boolean(floorRequired)}
+            isRequired={floorsEnabled}
           />
         ) : null}
         <div className="absolute bottom-5 right-4 z-30 flex flex-col items-end gap-2 lg:hidden">
@@ -1669,6 +1669,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
                 visibleFeatures={visibleFeatures}
                 tagFilter={tagFilter}
                 onTagFilterChange={setTagFilter}
+                floorsEnabled={floorsEnabled}
+                onToggleFloorsEnabled={handleToggleFloorsEnabled}
+                isTogglingFloors={isTogglingFloors}
                 onCreateFloor={handleCreateFloor}
                 isCreatingFloor={isCreatingFloor}
                 onUpdateFloor={handleUpdateFloor}
@@ -1749,6 +1752,9 @@ function SpatialEditorInner({ projectId, onBack }: SpatialEditorProps) {
               visibleFeatures={visibleFeatures}
               tagFilter={tagFilter}
               onTagFilterChange={setTagFilter}
+              floorsEnabled={floorsEnabled}
+              onToggleFloorsEnabled={handleToggleFloorsEnabled}
+              isTogglingFloors={isTogglingFloors}
               onCreateFloor={handleCreateFloor}
               isCreatingFloor={isCreatingFloor}
               onUpdateFloor={handleUpdateFloor}

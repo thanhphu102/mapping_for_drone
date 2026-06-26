@@ -184,7 +184,7 @@ export function EditorSidebar({
             Advanced
           </summary>
           <div className="mt-3 space-y-1 rounded-lg border border-slate-200 bg-white p-4">
-            <div>Project mode: {project?.editorMode ?? '-'}</div>
+            <div>Floors enabled: {project?.floorsEnabled ? 'yes' : 'no'}</div>
             <div>Floor: {activeFloor?.label ?? 'None'}</div>
             <div>Floors: {floors.length}</div>
             <div>Objects in view: {visibleFeatures.length}</div>
