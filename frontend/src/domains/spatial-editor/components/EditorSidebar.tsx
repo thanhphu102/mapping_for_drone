@@ -3,10 +3,10 @@ import { Info, Save } from 'lucide-react'
 import type { Feature, Position } from 'geojson'
 import type { DrawingProject, ProjectCanvasConfig, SpatialFloor } from '../types'
 import type { SnapPreview } from '../hooks/useSnapEngine'
-import { featureMeasurement, localCoordinates } from '../hooks/useDrawingEngine'
+import { featureMeasurement, featureTypeGeometry, localCoordinates } from '../hooks/useDrawingEngine'
 import type { InspectorDraft } from '../hooks/useInspectorFormState'
-import { GoogleBaseMapPicker } from '../../map/components/GoogleBaseMapPicker'
-import type { GoogleBaseMapMode } from '../../map/baseMapModes'
+
+const FEATURE_TYPE_OPTIONS = Object.keys(featureTypeGeometry).sort()
 import { EditorBackdropPicker } from './EditorBackdropPicker'
 import type { EditorBackdropMode } from '../editorBackdropMode'
 
@@ -18,7 +18,6 @@ interface EditorSidebarProps {
   mapZoom: number
   mapReady: boolean
   boundaryRendered: boolean
-  baseMapMode: GoogleBaseMapMode
   backdropMode: EditorBackdropMode
   visibleFeatures: Feature[]
   draftFeature: GeoJSON.FeatureCollection | null
@@ -30,7 +29,7 @@ interface EditorSidebarProps {
   onInspectorNameChange: (value: string) => void
   onInspectorTagChange: (value: string) => void
   onInspectorNoteChange: (value: string) => void
-  onBaseMapModeChange: (mode: GoogleBaseMapMode) => void
+  onInspectorFeatureTypeChange: (value: string) => void
   onBackdropModeChange: (mode: EditorBackdropMode) => void
   onSaveInspector: () => void
   isSavingInspector: boolean
@@ -44,7 +43,6 @@ export function EditorSidebar({
   mapZoom,
   mapReady,
   boundaryRendered,
-  baseMapMode,
   backdropMode,
   visibleFeatures,
   draftFeature,
@@ -56,7 +54,7 @@ export function EditorSidebar({
   onInspectorNameChange,
   onInspectorTagChange,
   onInspectorNoteChange,
-  onBaseMapModeChange,
+  onInspectorFeatureTypeChange,
   onBackdropModeChange,
   onSaveInspector,
   isSavingInspector,
@@ -90,10 +88,6 @@ export function EditorSidebar({
               <div className="mb-1 text-xs text-slate-500">Backdrop</div>
               <EditorBackdropPicker mode={backdropMode} onChange={onBackdropModeChange} />
             </div>
-            <div>
-              <div className="mb-1 text-xs text-slate-500">Base map</div>
-              <GoogleBaseMapPicker mode={baseMapMode} onChange={onBaseMapModeChange} />
-            </div>
           </div>
         </section>
 
@@ -114,6 +108,27 @@ export function EditorSidebar({
                 spellCheck={false}
                 disabled={selectedFeatures.length === 0 || isMultiSelect}
               />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs text-slate-500">Type</span>
+              <select
+                name="inspector-feature-type"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-400 focus:ring disabled:bg-slate-100 disabled:text-slate-400"
+                value={inspectorDraft.featureType}
+                onChange={(event) => onInspectorFeatureTypeChange(event.target.value)}
+                disabled={selectedFeatures.length === 0}
+              >
+                {!FEATURE_TYPE_OPTIONS.includes(inspectorDraft.featureType) ? (
+                  <option value={inspectorDraft.featureType}>
+                    {inspectorDraft.featureType || '—'}
+                  </option>
+                ) : null}
+                {FEATURE_TYPE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="block">
               <span className="mb-1 block text-xs text-slate-500">Tag</span>

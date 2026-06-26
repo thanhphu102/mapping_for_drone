@@ -1,4 +1,5 @@
 import {
+  Ban,
   Box,
   Circle,
   Hand,
@@ -10,7 +11,7 @@ import {
   Triangle,
   Type,
 } from 'lucide-react'
-import type { DrawMode } from '../hooks/useDrawingEngine'
+import { featureTypeForMode, type DrawMode } from '../hooks/useDrawingEngine'
 
 interface ToolConfig {
   mode: DrawMode
@@ -18,6 +19,12 @@ interface ToolConfig {
   shortcut: string
   icon: typeof MousePointer2
   group: 'cursor' | 'draw' | 'edit'
+  /** Override the feature type produced by this tool (defaults to featureTypeForMode). */
+  featureType?: string
+}
+
+function toolFeatureType(tool: ToolConfig): string {
+  return tool.featureType ?? featureTypeForMode(tool.mode)
 }
 
 const PRIMARY_TOOLS: ToolConfig[] = [
@@ -34,20 +41,23 @@ const SHAPE_TOOLS: ToolConfig[] = [
   { mode: 'rectangle', label: 'Rectangle', shortcut: 'B', icon: Box, group: 'draw' },
   { mode: 'ellipse', label: 'Ellipse', shortcut: 'O', icon: Circle, group: 'draw' },
   { mode: 'triangle', label: 'Triangle', shortcut: 'Shift+R', icon: Triangle, group: 'draw' },
+  { mode: 'polygon', label: 'No-Fly Zone', shortcut: 'Z', icon: Ban, group: 'draw', featureType: 'no_fly_zone' },
 ]
 
 interface EditorToolboxProps {
   mode: DrawMode
+  activeFeatureType: string
   toolsEnabled: boolean
   isSaving: boolean
   floorRequired: boolean
   hasFloorSelection: boolean
-  onSetMode: (mode: DrawMode) => void
+  onSetMode: (mode: DrawMode, featureType?: string | null) => void
   onClearDraft: () => void
 }
 
 export function EditorToolbox({
   mode,
+  activeFeatureType,
   toolsEnabled,
   isSaving,
   floorRequired,
@@ -56,9 +66,12 @@ export function EditorToolbox({
   onClearDraft,
 }: EditorToolboxProps) {
   const floorBlocked = floorRequired && !hasFloorSelection
+  const isToolActive = (tool: ToolConfig) =>
+    tool.group === 'draw'
+      ? mode === tool.mode && activeFeatureType === toolFeatureType(tool)
+      : mode === tool.mode
   const activeTool =
-    PRIMARY_TOOLS.find((tool) => tool.mode === mode) ??
-    SHAPE_TOOLS.find((tool) => tool.mode === mode)
+    PRIMARY_TOOLS.find(isToolActive) ?? SHAPE_TOOLS.find(isToolActive)
 
   return (
     <div className="pointer-events-auto absolute bottom-5 left-1/2 z-40 w-fit max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
@@ -72,7 +85,7 @@ export function EditorToolbox({
         <div className="flex w-max min-w-full items-center gap-2">
         {PRIMARY_TOOLS.map((tool, index) => {
           const Icon = tool.icon
-          const isActive = mode === tool.mode
+          const isActive = isToolActive(tool)
           const isFloorBlocked = floorBlocked && !['select', 'move'].includes(tool.mode)
           const isDisabled = !toolsEnabled || isSaving || isFloorBlocked
           const showSeparator = index > 0 && PRIMARY_TOOLS[index - 1].group !== tool.group
@@ -88,7 +101,7 @@ export function EditorToolbox({
                     : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950'
                 } disabled:cursor-not-allowed disabled:opacity-45`}
                 onClick={() => {
-                  onSetMode(tool.mode)
+                  onSetMode(tool.mode, tool.featureType ?? null)
                   if (tool.mode !== mode) onClearDraft()
                 }}
                 disabled={isDisabled}
@@ -106,11 +119,11 @@ export function EditorToolbox({
           <span className="mx-0.5 h-7 w-px bg-slate-200" aria-hidden="true" />
           {SHAPE_TOOLS.map((tool) => {
             const Icon = tool.icon
-            const isActive = mode === tool.mode
+            const isActive = isToolActive(tool)
             const isDisabled = !toolsEnabled || isSaving || floorBlocked
             return (
               <button
-                key={tool.mode}
+                key={`${tool.mode}:${tool.featureType ?? ''}`}
                 type="button"
                 className={`group relative flex h-11 min-w-11 items-center justify-center rounded-xl border transition ${
                   isActive
@@ -118,8 +131,8 @@ export function EditorToolbox({
                     : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950'
                 } disabled:cursor-not-allowed disabled:opacity-45`}
                 onClick={() => {
-                  onSetMode(tool.mode)
-                  if (tool.mode !== mode) onClearDraft()
+                  onSetMode(tool.mode, tool.featureType ?? null)
+                  if (tool.mode !== mode || activeFeatureType !== toolFeatureType(tool)) onClearDraft()
                 }}
                 disabled={isDisabled}
                 title={`${tool.label} (${tool.shortcut})`}

@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Geometry } from 'geojson'
-import { AlertTriangle, Loader2, Navigation, Search } from 'lucide-react'
+import { AlertTriangle, Ban, Check, Loader2, Navigation, Pencil, Search, Trash2, X } from 'lucide-react'
 import {
   fitVietnamOverview,
   useBaseMap,
 } from '../hooks/useBaseMap'
-import { GoogleBaseMapPicker } from './GoogleBaseMapPicker'
 import { PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM } from '../layers/overlayLayers'
 import { useOsmPreviewLayers } from '../hooks/useOsmPreviewLayers'
 import { useOverlaySelection } from '../hooks/useOverlaySelection'
@@ -27,6 +26,21 @@ import type {
 import type { OsmCandidate } from '../../osm/types'
 import type { SaveTrackedRouteResponse } from '../../tracking/types'
 import { TargetCommandPopover } from '../../drone/components/TargetCommandPopover'
+import { useNoFlyZoneMonitor } from '../../drone/hooks/useNoFlyZoneMonitor'
+import maplibregl from 'maplibre-gl'
+import {
+  collectNoFlyZones,
+  isPointInNoFlyZones,
+  noFlyZoneProjectRing,
+  NFZ_FILL_LAYER_ID,
+  type NoFlyZone,
+} from '../noFlyZones'
+import {
+  createNoFlyZone,
+  deleteNoFlyZone,
+  updateNoFlyZone,
+} from '../services/noFlyZones'
+import type { NoticeState } from '../../../shared/components/Notice'
 
 function isEditableEventTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
@@ -63,6 +77,7 @@ interface DroneMapProps {
   onCancelTarget: () => void
   onConfirmTarget: () => void
   onTrackingNotice: (notice: { tone: 'success' | 'error' | 'info'; title: string; detail?: string }) => void
+  onGeofenceBreach: (notice: NoticeState) => void
   selectedTrackingDroneId: string | null
   onTrackingStateChange: (state: {
     status: 'idle' | 'tracking' | 'paused' | 'completed'
@@ -102,6 +117,7 @@ export function DroneMap({
   onCancelTarget,
   onConfirmTarget,
   onTrackingNotice,
+  onGeofenceBreach,
   selectedTrackingDroneId,
   onTrackingStateChange,
   onTrackingControllerReady,
@@ -117,7 +133,28 @@ export function DroneMap({
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [isDrawingZone, setIsDrawingZone] = useState(false)
+  const [zonePoints, setZonePoints] = useState<[number, number][]>([])
+  const [isSavingZone, setIsSavingZone] = useState(false)
+  const [editZonesMode, setEditZonesMode] = useState(false)
+  const [editingZoneId, setEditingZoneId] = useState<string | null>(null)
+  const [editingRing, setEditingRing] = useState<[number, number][] | null>(null)
+  const [isSavingZoneEdit, setIsSavingZoneEdit] = useState(false)
+  const isDrawingZoneRef = useRef(false)
+  const editZonesModeRef = useRef(false)
+  const editRingRef = useRef<[number, number][]>([])
+  const vertexMarkersRef = useRef<maplibregl.Marker[]>([])
+  const noFlyZonesRef = useRef<NoFlyZone[]>([])
   const handleMapTargetSelect = useCallback((target: MapTargetDraft) => {
+    // While drawing a no-fly zone, map clicks add polygon vertices instead.
+    if (isDrawingZoneRef.current) {
+      setZonePoints((points) => [...points, [target.lon, target.lat]])
+      return
+    }
+    // While managing zones, clicks select a zone (handled on the layer), not a target.
+    if (editZonesModeRef.current) {
+      return
+    }
     if (disableTargetSelect) {
       return
     }
@@ -136,8 +173,6 @@ export function DroneMap({
     containerRef,
     map,
     mapStatus,
-    baseMapMode,
-    setBaseMapMode,
   } = useBaseMap(handleMapTargetSelect)
   const tracking = useDroneTracking({
     map,
@@ -243,6 +278,233 @@ export function DroneMap({
     overlayFloors,
     nearestOverlayProjects,
 	  } = useOverlaySelection()
+  useNoFlyZoneMonitor({
+    dronesById,
+    overlayProjects,
+    selectedOverlayFloorId,
+    onBreach: onGeofenceBreach,
+  })
+
+  // Active no-fly zones, shared by the breach monitor and the command block.
+  const noFlyZones = useMemo(
+    () => collectNoFlyZones(overlayProjects, selectedOverlayFloorId),
+    [overlayProjects, selectedOverlayFloorId],
+  )
+  useEffect(() => {
+    noFlyZonesRef.current = noFlyZones
+  }, [noFlyZones])
+  useEffect(() => {
+    isDrawingZoneRef.current = isDrawingZone
+  }, [isDrawingZone])
+  useEffect(() => {
+    editZonesModeRef.current = editZonesMode
+  }, [editZonesMode])
+
+  // Block only the actual command send (not location fetch) for targets in a zone.
+  const handleConfirmCommand = useCallback(() => {
+    if (
+      selectedTarget &&
+      isPointInNoFlyZones([selectedTarget.lon, selectedTarget.lat], noFlyZones)
+    ) {
+      onGeofenceBreach({
+        tone: 'error',
+        title: 'Command blocked',
+        detail: 'Target is inside a No-Fly Zone.',
+      })
+      return
+    }
+    onConfirmTarget()
+  }, [noFlyZones, onConfirmTarget, onGeofenceBreach, selectedTarget])
+
+  const startDrawingZone = useCallback(() => {
+    onCancelTarget()
+    setZonePoints([])
+    setIsDrawingZone(true)
+  }, [onCancelTarget])
+
+  const cancelDrawingZone = useCallback(() => {
+    setIsDrawingZone(false)
+    setZonePoints([])
+  }, [])
+
+  const finishDrawingZone = useCallback(async () => {
+    if (zonePoints.length < 3) {
+      onGeofenceBreach({
+        tone: 'error',
+        title: 'Need more points',
+        detail: 'A no-fly zone needs at least 3 points.',
+      })
+      return
+    }
+    setIsSavingZone(true)
+    try {
+      await createNoFlyZone(zonePoints, 'No-Fly Zone')
+      onGeofenceBreach({
+        tone: 'success',
+        title: 'No-Fly Zone saved',
+        detail: 'The restricted area is now active.',
+      })
+      setIsDrawingZone(false)
+      setZonePoints([])
+      scheduleOverlayRefreshRef.current?.()
+    } catch (error) {
+      onGeofenceBreach({
+        tone: 'error',
+        title: 'Could not save zone',
+        detail: error instanceof Error ? error.message : 'Unknown error',
+      })
+    } finally {
+      setIsSavingZone(false)
+    }
+  }, [onGeofenceBreach, scheduleOverlayRefreshRef, zonePoints])
+
+  // Write the current working polygon (being drawn or edited) to the draft source.
+  const renderZoneDraft = useCallback(
+    (ring: [number, number][], showVertices: boolean) => {
+      if (!map) return
+      const source = map.getSource('nfz-draft') as { setData?: (data: unknown) => void } | undefined
+      if (!source?.setData) return
+      const features: Record<string, unknown>[] = []
+      if (showVertices) {
+        ring.forEach((p) => features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: p }, properties: {} }))
+      }
+      if (ring.length >= 2) {
+        features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: showVertices ? ring : [...ring, ring[0]] }, properties: {} })
+      }
+      if (ring.length >= 3) {
+        features.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[...ring, ring[0]]] }, properties: {} })
+      }
+      source.setData({ type: 'FeatureCollection', features })
+    },
+    [map],
+  )
+
+  // Ensure the draft source/layers exist once the map is ready.
+  useEffect(() => {
+    if (!map) return
+    const ensure = () => {
+      if (!map.getSource('nfz-draft')) {
+        map.addSource('nfz-draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      }
+      if (!map.getLayer('nfz-draft-fill')) {
+        map.addLayer({ id: 'nfz-draft-fill', type: 'fill', source: 'nfz-draft', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#ef4444', 'fill-opacity': 0.2 } })
+      }
+      if (!map.getLayer('nfz-draft-line')) {
+        map.addLayer({ id: 'nfz-draft-line', type: 'line', source: 'nfz-draft', paint: { 'line-color': '#ef4444', 'line-width': 2, 'line-dasharray': [2, 1] } })
+      }
+      if (!map.getLayer('nfz-draft-point')) {
+        map.addLayer({ id: 'nfz-draft-point', type: 'circle', source: 'nfz-draft', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 4, 'circle-color': '#ef4444' } })
+      }
+    }
+    if (map.isStyleLoaded()) ensure()
+    else map.once('load', ensure)
+    return () => { map.off('load', ensure) }
+  }, [map])
+
+  // Render the working polygon: the points being drawn, or the zone being edited.
+  useEffect(() => {
+    if (isDrawingZone) {
+      renderZoneDraft(zonePoints, true)
+    } else if (editingRing) {
+      renderZoneDraft(editingRing, false)
+    } else {
+      renderZoneDraft([], false)
+    }
+  }, [editingRing, isDrawingZone, renderZoneDraft, zonePoints])
+
+  // Select a no-fly zone for editing when its red area is clicked (edit mode only).
+  useEffect(() => {
+    if (!map) return
+    const onZoneClick = (event: maplibregl.MapLayerMouseEvent) => {
+      if (!editZonesModeRef.current) return
+      const projectId = event.features?.[0]?.properties?.projectId
+      if (!projectId) return
+      const project = overlayProjectsRef.current.find((item) => item.id === projectId)
+      const ring = project ? noFlyZoneProjectRing(project) : null
+      if (!ring) return
+      editRingRef.current = ring.map((p) => [...p] as [number, number])
+      setEditingZoneId(String(projectId))
+      setEditingRing(ring)
+    }
+    map.on('click', NFZ_FILL_LAYER_ID, onZoneClick)
+    return () => { map.off('click', NFZ_FILL_LAYER_ID, onZoneClick) }
+  }, [map, overlayProjectsRef])
+
+  // Draggable vertex handles for the zone being edited.
+  useEffect(() => {
+    if (!map) return
+    vertexMarkersRef.current.forEach((marker) => marker.remove())
+    vertexMarkersRef.current = []
+    if (!editingZoneId) return
+    editRingRef.current.forEach((point, index) => {
+      const element = document.createElement('div')
+      element.setAttribute('data-nfz-vertex', String(index))
+      element.style.cssText =
+        'width:14px;height:14px;border-radius:50%;background:#dc2626;border:2px solid #fff;box-shadow:0 0 0 1px #dc2626;cursor:grab'
+      const marker = new maplibregl.Marker({ element, draggable: true })
+        .setLngLat(point)
+        .addTo(map)
+      marker.on('drag', () => {
+        const lngLat = marker.getLngLat()
+        editRingRef.current[index] = [lngLat.lng, lngLat.lat]
+        renderZoneDraft(editRingRef.current, false)
+      })
+      marker.on('dragend', () => {
+        setEditingRing(editRingRef.current.map((p) => [...p] as [number, number]))
+      })
+      vertexMarkersRef.current.push(marker)
+    })
+    return () => {
+      vertexMarkersRef.current.forEach((marker) => marker.remove())
+      vertexMarkersRef.current = []
+    }
+  }, [map, editingZoneId, renderZoneDraft])
+
+  const exitEditZones = useCallback(() => {
+    setEditZonesMode(false)
+    setEditingZoneId(null)
+    setEditingRing(null)
+    editRingRef.current = []
+  }, [])
+
+  const toggleEditZones = useCallback(() => {
+    onCancelTarget()
+    setEditingZoneId(null)
+    setEditingRing(null)
+    setEditZonesMode((value) => !value)
+  }, [onCancelTarget])
+
+  const saveZoneEdit = useCallback(async () => {
+    if (!editingZoneId || editRingRef.current.length < 3) return
+    setIsSavingZoneEdit(true)
+    try {
+      await updateNoFlyZone(editingZoneId, editRingRef.current, 'No-Fly Zone')
+      onGeofenceBreach({ tone: 'success', title: 'Zone updated', detail: 'The restricted area was reshaped.' })
+      scheduleOverlayRefreshRef.current?.()
+    } catch (error) {
+      onGeofenceBreach({ tone: 'error', title: 'Could not update zone', detail: error instanceof Error ? error.message : 'Unknown error' })
+    } finally {
+      setIsSavingZoneEdit(false)
+    }
+  }, [editingZoneId, onGeofenceBreach, scheduleOverlayRefreshRef])
+
+  const deleteSelectedZone = useCallback(async () => {
+    if (!editingZoneId) return
+    setIsSavingZoneEdit(true)
+    try {
+      await deleteNoFlyZone(editingZoneId)
+      onGeofenceBreach({ tone: 'success', title: 'Zone deleted', detail: 'The restricted area was removed.' })
+      setEditingZoneId(null)
+      setEditingRing(null)
+      editRingRef.current = []
+      scheduleOverlayRefreshRef.current?.()
+    } catch (error) {
+      onGeofenceBreach({ tone: 'error', title: 'Could not delete zone', detail: error instanceof Error ? error.message : 'Unknown error' })
+    } finally {
+      setIsSavingZoneEdit(false)
+    }
+  }, [editingZoneId, onGeofenceBreach, scheduleOverlayRefreshRef])
+
   const handleFocusVietnam = useCallback(() => {
     if (!map) return
     fitVietnamOverview(map)
@@ -453,11 +715,93 @@ export function DroneMap({
         <Navigation className="size-3.5" aria-hidden="true" />
         Reset view
       </button>
-      <GoogleBaseMapPicker
-        mode={baseMapMode}
-        onChange={setBaseMapMode}
-        className="absolute bottom-4 left-4 z-20"
-      />
+      <div className="absolute bottom-4 left-4 z-20">
+        {isDrawingZone ? (
+          <div className="flex flex-col gap-2 rounded-lg border border-rose-200 bg-white/95 p-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur">
+            <span className="px-1 text-rose-700">
+              Click the map to add points · {zonePoints.length} placed
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-2.5 py-1.5 text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={finishDrawingZone}
+                disabled={isSavingZone || zonePoints.length < 3}
+              >
+                {isSavingZone ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Check className="size-3.5" aria-hidden="true" />}
+                Finish
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
+                onClick={cancelDrawingZone}
+                disabled={isSavingZone}
+              >
+                <X className="size-3.5" aria-hidden="true" />
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : editZonesMode ? (
+          <div className="flex flex-col gap-2 rounded-lg border border-rose-200 bg-white/95 p-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur">
+            <span className="px-1 text-rose-700">
+              {editingZoneId
+                ? 'Drag the red points to reshape · then Save'
+                : 'Click a red zone to edit it'}
+            </span>
+            {editingZoneId ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-2.5 py-1.5 text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={saveZoneEdit}
+                  disabled={isSavingZoneEdit}
+                >
+                  {isSavingZoneEdit ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Check className="size-3.5" aria-hidden="true" />}
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-rose-300 px-2.5 py-1.5 text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                  onClick={deleteSelectedZone}
+                  disabled={isSavingZoneEdit}
+                >
+                  <Trash2 className="size-3.5" aria-hidden="true" />
+                  Delete
+                </button>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              className="inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1.5 text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
+              onClick={exitEditZones}
+              disabled={isSavingZoneEdit}
+            >
+              <X className="size-3.5" aria-hidden="true" />
+              Done
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+              onClick={startDrawingZone}
+            >
+              <Ban className="size-3.5" aria-hidden="true" />
+              Draw No-Fly Zone
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+              onClick={toggleEditZones}
+            >
+              <Pencil className="size-3.5" aria-hidden="true" />
+              Edit No-Fly Zones
+            </button>
+          </div>
+        )}
+      </div>
       {overlayZoom >= PUBLISHED_OVERLAY_FLOOR_PANEL_MIN_ZOOM && nearestOverlayProjects.length > 0 ? (
         <div className="absolute left-4 top-16 z-20 w-72 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs text-slate-700 shadow-lg backdrop-blur">
           <div className="mb-2 font-semibold text-slate-900">Saved maps nearby</div>
@@ -529,7 +873,7 @@ export function DroneMap({
           isFetchingFull={isFetchingFull}
           locationFetchMessage={locationFetchMessage}
           onCancel={onCancelTarget}
-          onConfirm={onConfirmTarget}
+          onConfirm={handleConfirmCommand}
         />
       ) : null}
     </div>

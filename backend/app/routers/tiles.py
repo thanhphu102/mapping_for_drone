@@ -30,13 +30,6 @@ _tile_http_client = httpx.AsyncClient(
     headers={"User-Agent": "mapping-for-drone-spatial-editor/0.1"},
 )
 
-_GOOGLE_TILE_LAYERS = {
-    "streets": "m",
-    "satellite": "s",
-    "hybrid": "y",
-}
-
-
 @router.get("/api/storage/status")
 async def get_storage_status():
     return {"storage": "json", "postgis": False}
@@ -121,28 +114,6 @@ async def _fetch_cached_tile(
             "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800, immutable",
         },
     )
-
-
-@router.get("/api/tiles/google/{map_style}/{z}/{x}/{y}.png")
-async def proxy_google_tile(map_style: str, z: str, x: str, y: str, scale: int = 1):
-    z_value, x_value, y_value = _parse_tile_coordinates(z, x, y)
-
-    if scale not in (1, 2):
-        raise HTTPException(status_code=400, detail="Invalid tile scale")
-
-    layer_code = _GOOGLE_TILE_LAYERS.get(map_style)
-    if layer_code is None:
-        raise HTTPException(status_code=404, detail="Unknown Google tile style")
-
-    normalized_scale = scale
-    subdomain_index = (x_value + y_value) % 4
-    tile_url = (
-        f"https://mt{subdomain_index}.google.com/vt/lyrs={layer_code}"
-        f"&x={x_value}&y={y_value}&z={z_value}&scale={normalized_scale}"
-    )
-    cache_key = (f"google-{map_style}", z_value, x_value, y_value, normalized_scale)
-
-    return await _fetch_cached_tile(cache_key, tile_url)
 
 
 @router.get("/api/tiles/osm/{z}/{x}/{y}.png")

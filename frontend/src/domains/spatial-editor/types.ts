@@ -101,4 +101,6 @@ export interface DrawingProject {
   sourceFeatureId?: string | null
   publishedAt?: number | null
   config?: ProjectCanvasConfig
+  /** Set to 'no_fly_zone' for standalone main-map no-fly zones. */
+  kind?: string
 }

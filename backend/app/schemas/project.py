@@ -48,6 +48,12 @@ class ImportGeoJsonProjectRequest(BaseModel):
     editorMode: EditorMode | None = None
 
 
+class CreateNoFlyZoneRequest(BaseModel):
+    name: str | None = None
+    # GeoJSON Polygon geometry in [lon, lat] order.
+    geometry: dict[str, Any]
+
+
 class CreateChildProjectRequest(BaseModel):
     name: str | None = None
     editorMode: Literal["building", "indoor"] = "building"
