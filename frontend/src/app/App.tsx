@@ -93,14 +93,6 @@ function App() {
       isOpeningEditor={osmFlow.isOpeningEditor}
       confirmedLargeArea={osmFlow.confirmedLargeArea}
       selectedBoundaryGeometry={osmFlow.selectedBoundaryGeometry}
-      calibration={osmFlow.calibration}
-      previewCalibration={{
-        offsetLon: osmFlow.calibration.offsetLon,
-        offsetLat: osmFlow.calibration.offsetLat,
-        rotationDeg: osmFlow.calibration.rotationDeg,
-      }}
-      calibrationDragEnabled={osmFlow.calibrationDragEnabled}
-      isSavingCalibration={osmFlow.isSavingCalibration}
       selectedTrackingDroneId={trackingFlow.selectedTrackingDroneId}
       trackingState={trackingFlow.trackingState}
       notice={notice}
@@ -115,12 +107,6 @@ function App() {
       onHoverCandidate={osmFlow.handleCandidateHover}
       onSelectCandidate={osmFlow.handleCandidateSelect}
       onChangeEditorMode={osmFlow.setEditorModeOverride}
-      onCalibrationOffsetChange={osmFlow.setCalibrationOffset}
-      onCalibrationNudge={osmFlow.nudgeCalibrationByDelta}
-      onCalibrationRotateNudge={osmFlow.nudgeCalibrationRotation}
-      onResetCalibration={osmFlow.resetCalibrationOffset}
-      onSaveCalibrationForCity={osmFlow.saveCalibrationForCity}
-      onToggleCalibrationDrag={osmFlow.toggleCalibrationDrag}
       onOpenSpatialEditor={osmFlow.handleOpenSpatialEditor}
       onCloseOsmPanel={osmFlow.handleCloseOsmPanel}
       onSelectTrackingDrone={trackingFlow.handleSelectDroneForTracking}

@@ -44,7 +44,6 @@ export interface OsmElementGeometryResponse {
   osmId: number
   tags: OsmTags
   geometry: MultiPolygon
-  rawGeometry?: MultiPolygon
   editorMode: EditorMode
   classification: EnclosingSpaceClassification
   bbox: [number, number, number, number]
@@ -53,23 +52,4 @@ export interface OsmElementGeometryResponse {
   perimeterM: number
   pointCount: number
   warnings: string[]
-  cityCalibrationKey?: string | null
-  cityLabel?: string | null
-  appliedCalibration?: {
-    offsetLon: number
-    offsetLat: number
-    rotationDeg: number
-    updatedAt?: number | null
-  } | null
-}
-
-export interface OsmCityCalibration {
-  cityKey: string
-  cityLabel?: string | null
-  offsetLon: number
-  offsetLat: number
-  rotationDeg: number
-  sourceOsmType?: OsmElementType | null
-  sourceOsmId?: number | null
-  updatedAt?: number | null
 }

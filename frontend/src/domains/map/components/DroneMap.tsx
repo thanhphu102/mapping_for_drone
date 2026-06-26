@@ -61,14 +61,6 @@ interface DroneMapProps {
   commandStatus: CommandDispatchStatus
   highlightedCandidate: OsmCandidate | null
   selectedBoundaryGeometry: Geometry | null
-  calibrationDragEnabled?: boolean
-  onCalibrationDragDelta?: (deltaLon: number, deltaLat: number) => void
-  onCalibrationRotateDelta?: (deltaDeg: number) => void
-  previewCalibration?: {
-    offsetLon: number
-    offsetLat: number
-    rotationDeg: number
-  } | null
   isFetchingCandidates: boolean
   isFetchingFull: boolean
   locationFetchMessage: { tone: 'success' | 'error' | 'info'; text: string } | null
@@ -105,10 +97,6 @@ export function DroneMap({
   commandStatus,
   highlightedCandidate,
   selectedBoundaryGeometry,
-  calibrationDragEnabled = false,
-  onCalibrationDragDelta,
-  onCalibrationRotateDelta,
-  previewCalibration = null,
   isFetchingCandidates,
   isFetchingFull,
   locationFetchMessage,
@@ -608,10 +596,6 @@ export function DroneMap({
     map,
     highlightedCandidate,
     selectedBoundaryGeometry,
-    calibrationDragEnabled,
-    onCalibrationDragDelta,
-    onCalibrationRotateDelta,
-    previewCalibration,
   })
 
   useEffect(() => {

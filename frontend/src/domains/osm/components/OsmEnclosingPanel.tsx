@@ -18,23 +18,9 @@ interface OsmEnclosingPanelProps {
   status?: OsmPanelStatus | null
   isOpeningEditor?: boolean
   confirmedLargeArea?: boolean
-  calibration?: {
-    cityKey: string | null
-    cityLabel: string | null
-    offsetLon: number
-    offsetLat: number
-    rotationDeg: number
-    isDirty: boolean
-  }
-  calibrationDragEnabled?: boolean
-  isSavingCalibration?: boolean
   onHoverCandidate: (candidate: OsmCandidate | null) => void
   onSelectCandidate: (candidate: OsmCandidate) => void
   onChangeEditorMode: (mode: EditorMode) => void
-  onCalibrationOffsetChange: (field: 'offsetLon' | 'offsetLat' | 'rotationDeg', value: number) => void
-  onResetCalibration: () => void
-  onSaveCalibrationForCity: () => void
-  onToggleCalibrationDrag: () => void
   onOpenSpatialEditor: () => void
   onClose: () => void
 }
@@ -65,16 +51,9 @@ export function OsmEnclosingPanel({
   status = null,
   isOpeningEditor = false,
   confirmedLargeArea = false,
-  calibration,
-  calibrationDragEnabled = false,
-  isSavingCalibration = false,
   onHoverCandidate,
   onSelectCandidate,
   onChangeEditorMode,
-  onCalibrationOffsetChange,
-  onResetCalibration,
-  onSaveCalibrationForCity,
-  onToggleCalibrationDrag,
   onOpenSpatialEditor,
   onClose,
 }: OsmEnclosingPanelProps) {
@@ -214,72 +193,6 @@ export function OsmEnclosingPanel({
                                   {mode}
                                 </button>
                               ))}
-                            </div>
-                          </div>
-                          <div className="mt-3 rounded-md border border-slate-200 bg-white p-2">
-                            <div className="text-xs font-semibold uppercase text-slate-500">Calibrate boundary</div>
-                            <div className="mt-1 text-xs text-slate-600">
-                              {calibration?.cityLabel || calibration?.cityKey || 'No city key'}
-                            </div>
-                            <div className="mt-2 grid grid-cols-2 gap-2">
-                              <label className="text-xs text-slate-600">
-                                Lon
-                                <input
-                                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
-                                  type="number"
-                                  step="0.000001"
-                                  value={calibration?.offsetLon ?? 0}
-                                  onChange={(event) => onCalibrationOffsetChange('offsetLon', Number(event.target.value))}
-                                />
-                              </label>
-                              <label className="text-xs text-slate-600">
-                                Lat
-                                <input
-                                  className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
-                                  type="number"
-                                  step="0.000001"
-                                  value={calibration?.offsetLat ?? 0}
-                                  onChange={(event) => onCalibrationOffsetChange('offsetLat', Number(event.target.value))}
-                                />
-                              </label>
-                            </div>
-                            <label className="mt-2 block text-xs text-slate-600">
-                              Rotation (deg)
-                              <input
-                                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs"
-                                type="number"
-                                step="0.1"
-                                value={calibration?.rotationDeg ?? 0}
-                                onChange={(event) => onCalibrationOffsetChange('rotationDeg', Number(event.target.value))}
-                              />
-                            </label>
-                            <div className="mt-2 flex gap-2">
-                              <button
-                                type="button"
-                                className={`rounded-md border px-2 py-1 text-xs font-medium ${
-                                  calibrationDragEnabled
-                                    ? 'border-sky-300 bg-sky-50 text-sky-800'
-                                    : 'border-slate-300 bg-white text-slate-700'
-                                }`}
-                                onClick={onToggleCalibrationDrag}
-                              >
-                                {calibrationDragEnabled ? 'Dragging on map' : 'Drag calibrate'}
-                              </button>
-                              <button
-                                type="button"
-                                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700"
-                                onClick={onResetCalibration}
-                              >
-                                Reset
-                              </button>
-                              <button
-                                type="button"
-                                className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-800 disabled:opacity-50"
-                                onClick={onSaveCalibrationForCity}
-                                disabled={isSavingCalibration}
-                              >
-                                {isSavingCalibration ? 'Saving...' : 'Save for city'}
-                              </button>
                             </div>
                           </div>
                           <details className="mt-3 rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600">
