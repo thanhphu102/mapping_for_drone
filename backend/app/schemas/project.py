@@ -22,10 +22,14 @@ class ImportGeoJsonProjectRequest(BaseModel):
     geojson: dict[str, Any]
 
 
-class CreateNoFlyZoneRequest(BaseModel):
+class CreateZoneRequest(BaseModel):
     name: str | None = None
     # GeoJSON Polygon geometry in [lon, lat] order.
     geometry: dict[str, Any]
+
+
+# Backwards-compatible alias: no-fly and allowed zones share the same request shape.
+CreateNoFlyZoneRequest = CreateZoneRequest
 
 
 class CreateChildProjectRequest(BaseModel):

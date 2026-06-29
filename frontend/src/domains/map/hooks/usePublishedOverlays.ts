@@ -26,7 +26,9 @@ import {
   removeSourceSafe,
 } from './useMapSources'
 import {
-  isNoFlyZoneProject,
+  ALLOWED_FILL_LAYER_ID,
+  ALLOWED_LINE_LAYER_ID,
+  isZoneProject,
   NFZ_FILL_LAYER_ID,
   NFZ_LINE_LAYER_ID,
 } from '../noFlyZones'
@@ -154,7 +156,12 @@ export function usePublishedOverlays({
           id: PUBLISHED_OVERLAY_FEATURE_FILL_LAYER_ID,
           type: 'fill',
           source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
-          filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['!=', ['get', 'featureType'], 'no_fly_zone']],
+          filter: [
+            'all',
+            ['==', ['geometry-type'], 'Polygon'],
+            ['!=', ['get', 'featureType'], 'no_fly_zone'],
+            ['!=', ['get', 'featureType'], 'allowed_zone'],
+          ],
           paint: {
             'fill-color': '#a855f7',
             'fill-opacity': 0.24,
@@ -166,10 +173,39 @@ export function usePublishedOverlays({
           id: PUBLISHED_OVERLAY_FEATURE_LINE_LAYER_ID,
           type: 'line',
           source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
-          filter: ['!=', ['get', 'featureType'], 'no_fly_zone'],
+          filter: [
+            'all',
+            ['!=', ['get', 'featureType'], 'no_fly_zone'],
+            ['!=', ['get', 'featureType'], 'allowed_zone'],
+          ],
           paint: {
             'line-color': '#7e22ce',
             'line-width': 3,
+          },
+        })
+      }
+      // Allowed (inclusion) zones: solid green fill + solid green outline.
+      if (!map.getLayer(ALLOWED_FILL_LAYER_ID)) {
+        map.addLayer({
+          id: ALLOWED_FILL_LAYER_ID,
+          type: 'fill',
+          source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
+          filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['==', ['get', 'featureType'], 'allowed_zone']],
+          paint: {
+            'fill-color': '#22c55e',
+            'fill-opacity': 0.18,
+          },
+        })
+      }
+      if (!map.getLayer(ALLOWED_LINE_LAYER_ID)) {
+        map.addLayer({
+          id: ALLOWED_LINE_LAYER_ID,
+          type: 'line',
+          source: PUBLISHED_OVERLAY_FEATURE_SOURCE_ID,
+          filter: ['==', ['get', 'featureType'], 'allowed_zone'],
+          paint: {
+            'line-color': '#16a34a',
+            'line-width': 2.5,
           },
         })
       }
@@ -220,9 +256,9 @@ export function usePublishedOverlays({
       const boundarySource = getSourceSafe(map, PUBLISHED_OVERLAY_BOUNDARY_SOURCE_ID)
       const featureSource = getSourceSafe(map, PUBLISHED_OVERLAY_FEATURE_SOURCE_ID)
       const visibleBoundaryProjects = projects.filter(
-        // No-fly zones render as their own dashed-red polygon, so skip the
+        // Geofence zones render as their own coloured polygon, so skip the
         // generic boundary outline (it would be larger than the zone itself).
-        (project) => zoom >= project.boundaryMinZoom && !isNoFlyZoneProject(project),
+        (project) => zoom >= project.boundaryMinZoom && !isZoneProject(project),
       )
       const visibleFeatureProjects = projects.filter((project) => zoom >= project.detailMinZoom)
 
@@ -327,6 +363,8 @@ export function usePublishedOverlays({
       for (const layerId of [
         NFZ_LINE_LAYER_ID,
         NFZ_FILL_LAYER_ID,
+        ALLOWED_LINE_LAYER_ID,
+        ALLOWED_FILL_LAYER_ID,
         PUBLISHED_OVERLAY_FEATURE_POINT_LAYER_ID,
         PUBLISHED_OVERLAY_FEATURE_LINE_LAYER_ID,
         PUBLISHED_OVERLAY_FEATURE_FILL_LAYER_ID,

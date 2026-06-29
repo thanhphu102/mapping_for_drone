@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { isPointInPolygon } from './geoUtils'
+import { isPointInPolygon, isPointInPolygonWithHoles } from './geoUtils'
 
 const square: [number, number][] = [
   [0, 0],
   [10, 0],
   [10, 10],
   [0, 10],
+]
+
+const innerHole: [number, number][] = [
+  [4, 4],
+  [6, 4],
+  [6, 6],
+  [4, 6],
 ]
 
 describe('isPointInPolygon', () => {
@@ -28,5 +35,23 @@ describe('isPointInPolygon', () => {
 
   it('returns false for an empty polygon', () => {
     expect(isPointInPolygon([0, 0], [])).toBe(false)
+  })
+})
+
+describe('isPointInPolygonWithHoles', () => {
+  it('returns true inside the outer ring with no holes', () => {
+    expect(isPointInPolygonWithHoles([5, 5], square)).toBe(true)
+  })
+
+  it('returns false inside a carved-out hole (the donut gap)', () => {
+    expect(isPointInPolygonWithHoles([5, 5], square, [innerHole])).toBe(false)
+  })
+
+  it('returns true in the ring area outside the hole', () => {
+    expect(isPointInPolygonWithHoles([1, 1], square, [innerHole])).toBe(true)
+  })
+
+  it('returns false outside the outer ring regardless of holes', () => {
+    expect(isPointInPolygonWithHoles([15, 15], square, [innerHole])).toBe(false)
   })
 })

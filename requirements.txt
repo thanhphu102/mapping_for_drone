@@ -3,8 +3,10 @@ uvicorn[standard]>=0.18.0
 websockets>=14.0
 httpx[http2]>=0.28.1
 python-multipart>=0.0.21
+shapely>=2.0
 
 # Notes:
 # - We use FastAPI + Uvicorn for the control API and WebSocket server.
 # - The `websockets` package is used by the simple async drone simulator.
 # - `httpx` supports FastAPI/Starlette test clients and HTTP client work.
+# - `shapely` performs the polygon boolean ops for zone collapse (newest-wins clipping).

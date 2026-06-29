@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Geometry } from 'geojson'
-import { AlertTriangle, Ban, Check, Loader2, Navigation, Pencil, Search, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Ban, Check, Loader2, Navigation, Pencil, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 import {
   fitVietnamOverview,
   useBaseMap,
@@ -29,16 +29,23 @@ import { TargetCommandPopover } from '../../drone/components/TargetCommandPopove
 import { useNoFlyZoneMonitor } from '../../drone/hooks/useNoFlyZoneMonitor'
 import maplibregl from 'maplibre-gl'
 import {
+  ALLOWED_FILL_LAYER_ID,
+  ALLOWED_ZONE_FEATURE_TYPE,
+  collectAllowedZones,
   collectNoFlyZones,
+  isInsideAnyAllowedZone,
   isPointInNoFlyZones,
-  noFlyZoneProjectRing,
   NFZ_FILL_LAYER_ID,
-  type NoFlyZone,
+  NO_FLY_ZONE_FEATURE_TYPE,
+  zoneProjectRing,
+  zoneProjectType,
+  type Zone,
+  type ZoneFeatureType,
 } from '../noFlyZones'
 import {
-  createNoFlyZone,
-  deleteNoFlyZone,
-  updateNoFlyZone,
+  createZone,
+  deleteZone,
+  updateZone,
 } from '../services/noFlyZones'
 import type { NoticeState } from '../../../shared/components/Notice'
 
@@ -122,17 +129,19 @@ export function DroneMap({
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [isDrawingZone, setIsDrawingZone] = useState(false)
+  const [activeZoneType, setActiveZoneType] = useState<ZoneFeatureType>(NO_FLY_ZONE_FEATURE_TYPE)
   const [zonePoints, setZonePoints] = useState<[number, number][]>([])
   const [isSavingZone, setIsSavingZone] = useState(false)
   const [editZonesMode, setEditZonesMode] = useState(false)
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null)
+  const [editingZoneType, setEditingZoneType] = useState<ZoneFeatureType>(NO_FLY_ZONE_FEATURE_TYPE)
   const [editingRing, setEditingRing] = useState<[number, number][] | null>(null)
   const [isSavingZoneEdit, setIsSavingZoneEdit] = useState(false)
   const isDrawingZoneRef = useRef(false)
   const editZonesModeRef = useRef(false)
   const editRingRef = useRef<[number, number][]>([])
   const vertexMarkersRef = useRef<maplibregl.Marker[]>([])
-  const noFlyZonesRef = useRef<NoFlyZone[]>([])
+  const noFlyZonesRef = useRef<Zone[]>([])
   const handleMapTargetSelect = useCallback((target: MapTargetDraft) => {
     // While drawing a no-fly zone, map clicks add polygon vertices instead.
     if (isDrawingZoneRef.current) {
@@ -273,9 +282,13 @@ export function DroneMap({
     onBreach: onGeofenceBreach,
   })
 
-  // Active no-fly zones, shared by the breach monitor and the command block.
+  // Active zones, shared by the breach monitor and the command block.
   const noFlyZones = useMemo(
     () => collectNoFlyZones(overlayProjects, selectedOverlayFloorId),
+    [overlayProjects, selectedOverlayFloorId],
+  )
+  const allowedZones = useMemo(
+    () => collectAllowedZones(overlayProjects, selectedOverlayFloorId),
     [overlayProjects, selectedOverlayFloorId],
   )
   useEffect(() => {
@@ -288,24 +301,34 @@ export function DroneMap({
     editZonesModeRef.current = editZonesMode
   }, [editZonesMode])
 
-  // Block only the actual command send (not location fetch) for targets in a zone.
+  // Block only the actual command send (not location fetch) for targets that
+  // violate a zone: inside a no-fly zone, or outside every allowed zone.
   const handleConfirmCommand = useCallback(() => {
-    if (
-      selectedTarget &&
-      isPointInNoFlyZones([selectedTarget.lon, selectedTarget.lat], noFlyZones)
-    ) {
-      onGeofenceBreach({
-        tone: 'error',
-        title: 'Command blocked',
-        detail: 'Target is inside a No-Fly Zone.',
-      })
-      return
+    if (selectedTarget) {
+      const point: [number, number] = [selectedTarget.lon, selectedTarget.lat]
+      if (isPointInNoFlyZones(point, noFlyZones)) {
+        onGeofenceBreach({
+          tone: 'error',
+          title: 'Command blocked',
+          detail: 'Target is inside a No-Fly Zone.',
+        })
+        return
+      }
+      if (allowedZones.length > 0 && !isInsideAnyAllowedZone(point, allowedZones)) {
+        onGeofenceBreach({
+          tone: 'error',
+          title: 'Command blocked',
+          detail: 'Target is outside the allowed flight zone.',
+        })
+        return
+      }
     }
     onConfirmTarget()
-  }, [noFlyZones, onConfirmTarget, onGeofenceBreach, selectedTarget])
+  }, [allowedZones, noFlyZones, onConfirmTarget, onGeofenceBreach, selectedTarget])
 
-  const startDrawingZone = useCallback(() => {
+  const startDrawingZone = useCallback((type: ZoneFeatureType) => {
     onCancelTarget()
+    setActiveZoneType(type)
     setZonePoints([])
     setIsDrawingZone(true)
   }, [onCancelTarget])
@@ -316,21 +339,25 @@ export function DroneMap({
   }, [])
 
   const finishDrawingZone = useCallback(async () => {
+    const isAllowed = activeZoneType === ALLOWED_ZONE_FEATURE_TYPE
+    const zoneLabel = isAllowed ? 'Allowed Zone' : 'No-Fly Zone'
     if (zonePoints.length < 3) {
       onGeofenceBreach({
         tone: 'error',
         title: 'Need more points',
-        detail: 'A no-fly zone needs at least 3 points.',
+        detail: `A ${isAllowed ? 'allowed' : 'no-fly'} zone needs at least 3 points.`,
       })
       return
     }
     setIsSavingZone(true)
     try {
-      await createNoFlyZone(zonePoints, 'No-Fly Zone')
+      await createZone(zonePoints, activeZoneType, zoneLabel)
       onGeofenceBreach({
         tone: 'success',
-        title: 'No-Fly Zone saved',
-        detail: 'The restricted area is now active.',
+        title: `${zoneLabel} saved`,
+        detail: isAllowed
+          ? 'Drones may now only fly inside the allowed area.'
+          : 'The restricted area is now active.',
       })
       setIsDrawingZone(false)
       setZonePoints([])
@@ -344,7 +371,7 @@ export function DroneMap({
     } finally {
       setIsSavingZone(false)
     }
-  }, [onGeofenceBreach, scheduleOverlayRefreshRef, zonePoints])
+  }, [activeZoneType, onGeofenceBreach, scheduleOverlayRefreshRef, zonePoints])
 
   // Write the current working polygon (being drawn or edited) to the draft source.
   const renderZoneDraft = useCallback(
@@ -400,7 +427,26 @@ export function DroneMap({
     }
   }, [editingRing, isDrawingZone, renderZoneDraft, zonePoints])
 
-  // Select a no-fly zone for editing when its red area is clicked (edit mode only).
+  // Tint the draft polygon green for allowed zones, red for no-fly zones.
+  const draftZoneType = isDrawingZone ? activeZoneType : editingZoneType
+  useEffect(() => {
+    if (!map) return
+    const isAllowed = draftZoneType === ALLOWED_ZONE_FEATURE_TYPE
+    const fillColor = isAllowed ? '#22c55e' : '#ef4444'
+    const lineColor = isAllowed ? '#16a34a' : '#ef4444'
+    const apply = () => {
+      if (map.getLayer('nfz-draft-fill')) map.setPaintProperty('nfz-draft-fill', 'fill-color', fillColor)
+      if (map.getLayer('nfz-draft-line')) map.setPaintProperty('nfz-draft-line', 'line-color', lineColor)
+      if (map.getLayer('nfz-draft-point')) map.setPaintProperty('nfz-draft-point', 'circle-color', lineColor)
+    }
+    if (map.isStyleLoaded()) apply()
+    else map.once('load', apply)
+    return () => { map.off('load', apply) }
+  }, [map, draftZoneType])
+
+  // Select a zone for editing when its coloured area is clicked (edit mode only).
+  // Simple single-polygon zones become drag-editable; collapsed zones (reshaped
+  // automatically into a MultiPolygon or donut) are selected as delete-only.
   useEffect(() => {
     if (!map) return
     const onZoneClick = (event: maplibregl.MapLayerMouseEvent) => {
@@ -408,14 +454,19 @@ export function DroneMap({
       const projectId = event.features?.[0]?.properties?.projectId
       if (!projectId) return
       const project = overlayProjectsRef.current.find((item) => item.id === projectId)
-      const ring = project ? noFlyZoneProjectRing(project) : null
-      if (!ring) return
-      editRingRef.current = ring.map((p) => [...p] as [number, number])
+      if (!project) return
+      setEditingZoneType(zoneProjectType(project) ?? NO_FLY_ZONE_FEATURE_TYPE)
+      const ring = zoneProjectRing(project)
+      editRingRef.current = ring ? ring.map((p) => [...p] as [number, number]) : []
       setEditingZoneId(String(projectId))
       setEditingRing(ring)
     }
     map.on('click', NFZ_FILL_LAYER_ID, onZoneClick)
-    return () => { map.off('click', NFZ_FILL_LAYER_ID, onZoneClick) }
+    map.on('click', ALLOWED_FILL_LAYER_ID, onZoneClick)
+    return () => {
+      map.off('click', NFZ_FILL_LAYER_ID, onZoneClick)
+      map.off('click', ALLOWED_FILL_LAYER_ID, onZoneClick)
+    }
   }, [map, overlayProjectsRef])
 
   // Draggable vertex handles for the zone being edited.
@@ -464,24 +515,25 @@ export function DroneMap({
 
   const saveZoneEdit = useCallback(async () => {
     if (!editingZoneId || editRingRef.current.length < 3) return
+    const label = editingZoneType === ALLOWED_ZONE_FEATURE_TYPE ? 'Allowed Zone' : 'No-Fly Zone'
     setIsSavingZoneEdit(true)
     try {
-      await updateNoFlyZone(editingZoneId, editRingRef.current, 'No-Fly Zone')
-      onGeofenceBreach({ tone: 'success', title: 'Zone updated', detail: 'The restricted area was reshaped.' })
+      await updateZone(editingZoneId, editRingRef.current, editingZoneType, label)
+      onGeofenceBreach({ tone: 'success', title: 'Zone updated', detail: 'The zone was reshaped.' })
       scheduleOverlayRefreshRef.current?.()
     } catch (error) {
       onGeofenceBreach({ tone: 'error', title: 'Could not update zone', detail: error instanceof Error ? error.message : 'Unknown error' })
     } finally {
       setIsSavingZoneEdit(false)
     }
-  }, [editingZoneId, onGeofenceBreach, scheduleOverlayRefreshRef])
+  }, [editingZoneId, editingZoneType, onGeofenceBreach, scheduleOverlayRefreshRef])
 
   const deleteSelectedZone = useCallback(async () => {
     if (!editingZoneId) return
     setIsSavingZoneEdit(true)
     try {
-      await deleteNoFlyZone(editingZoneId)
-      onGeofenceBreach({ tone: 'success', title: 'Zone deleted', detail: 'The restricted area was removed.' })
+      await deleteZone(editingZoneId)
+      onGeofenceBreach({ tone: 'success', title: 'Zone deleted', detail: 'The zone was removed.' })
       setEditingZoneId(null)
       setEditingRing(null)
       editRingRef.current = []
@@ -765,14 +817,25 @@ export function DroneMap({
       </div>
       <div className="absolute bottom-4 left-4 z-20">
         {isDrawingZone ? (
-          <div className="flex flex-col gap-2 rounded-lg border border-rose-200 bg-white/95 p-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur">
-            <span className="px-1 text-rose-700">
-              Click the map to add points · {zonePoints.length} placed
+          <div
+            className={`flex flex-col gap-2 rounded-lg border bg-white/95 p-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur ${
+              activeZoneType === ALLOWED_ZONE_FEATURE_TYPE ? 'border-emerald-200' : 'border-rose-200'
+            }`}
+          >
+            <span className={`px-1 ${activeZoneType === ALLOWED_ZONE_FEATURE_TYPE ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {activeZoneType === ALLOWED_ZONE_FEATURE_TYPE
+                ? 'Click the map to outline the allowed area'
+                : 'Click the map to outline the no-fly area'}{' '}
+              · {zonePoints.length} placed
             </span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-2.5 py-1.5 text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                  activeZoneType === ALLOWED_ZONE_FEATURE_TYPE
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
                 onClick={finishDrawingZone}
                 disabled={isSavingZone || zonePoints.length < 3}
               >
@@ -791,23 +854,27 @@ export function DroneMap({
             </div>
           </div>
         ) : editZonesMode ? (
-          <div className="flex flex-col gap-2 rounded-lg border border-rose-200 bg-white/95 p-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur">
-            <span className="px-1 text-rose-700">
-              {editingZoneId
-                ? 'Drag the red points to reshape · then Save'
-                : 'Click a red zone to edit it'}
+          <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur">
+            <span className="px-1 text-slate-600">
+              {!editingZoneId
+                ? 'Click a zone to edit it'
+                : editingRing
+                  ? 'Drag the points to reshape · then Save'
+                  : 'This zone was reshaped automatically — delete it or draw a new one'}
             </span>
             {editingZoneId ? (
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-2.5 py-1.5 text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={saveZoneEdit}
-                  disabled={isSavingZoneEdit}
-                >
-                  {isSavingZoneEdit ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Check className="size-3.5" aria-hidden="true" />}
-                  Save
-                </button>
+                {editingRing ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-2.5 py-1.5 text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={saveZoneEdit}
+                    disabled={isSavingZoneEdit}
+                  >
+                    {isSavingZoneEdit ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Check className="size-3.5" aria-hidden="true" />}
+                    Save
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="inline-flex items-center gap-1.5 rounded-md border border-rose-300 px-2.5 py-1.5 text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
@@ -834,18 +901,26 @@ export function DroneMap({
             <button
               type="button"
               className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
-              onClick={startDrawingZone}
+              onClick={() => startDrawingZone(NO_FLY_ZONE_FEATURE_TYPE)}
             >
               <Ban className="size-3.5" aria-hidden="true" />
               Draw No-Fly Zone
             </button>
             <button
               type="button"
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              onClick={() => startDrawingZone(ALLOWED_ZONE_FEATURE_TYPE)}
+            >
+              <ShieldCheck className="size-3.5" aria-hidden="true" />
+              Draw Allowed Zone
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white/95 px-3 py-2 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-500"
               onClick={toggleEditZones}
             >
               <Pencil className="size-3.5" aria-hidden="true" />
-              Edit No-Fly Zones
+              Edit Zones
             </button>
           </div>
         )}
