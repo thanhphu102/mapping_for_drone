@@ -4,9 +4,11 @@ import type { DroneRegistry } from '../types'
 import type { NoticeState } from '../../../shared/components/Notice'
 import { throttle, type ThrottledFunction } from '../../../shared/utils/throttle'
 import {
+  collectAllowedZones,
   collectNoFlyZones,
+  isInsideAnyAllowedZone,
   isPointInNoFlyZones,
-  type NoFlyZone,
+  type Zone,
 } from '../../map/noFlyZones'
 
 // Telemetry can arrive at 10-60Hz; cap the polygon math to a few times per second.
@@ -20,12 +22,18 @@ interface UseNoFlyZoneMonitorParams {
 }
 
 /**
- * Watches connected drones against active `no_fly_zone` overlay polygons and
- * fires a high-priority notice the moment a drone enters a restricted zone.
+ * Watches connected drones against the active geofence zones and fires a
+ * high-priority notice the moment a drone violates one. Two complementary rules:
  *
- * Performance: the filtered zone list is memoized and the polygon intersection
- * pass is throttled. Notices are edge-triggered (once per entry) so high-rate
- * telemetry never spams the UI; a drone that leaves and re-enters alerts again.
+ *  - **No-fly zones** (exclusion): a drone INSIDE any `no_fly_zone` breaches.
+ *  - **Allowed zones** (inclusion): when at least one `allowed_zone` exists, a
+ *    drone OUTSIDE all of them breaches (it has left the permitted airspace).
+ *    With no allowed zones, the inclusion rule is inactive.
+ *
+ * Performance: the filtered zone lists are memoized and the polygon pass is
+ * throttled. Notices are edge-triggered (once per entry/exit) so high-rate
+ * telemetry never spams the UI; the two rules track separate breach sets so a
+ * drone can transition between them cleanly.
  */
 export function useNoFlyZoneMonitor({
   dronesById,
@@ -33,19 +41,28 @@ export function useNoFlyZoneMonitor({
   selectedOverlayFloorId,
   onBreach,
 }: UseNoFlyZoneMonitorParams): void {
-  const noFlyZones = useMemo<NoFlyZone[]>(
+  const noFlyZones = useMemo<Zone[]>(
     () => collectNoFlyZones(overlayProjects, selectedOverlayFloorId),
     [overlayProjects, selectedOverlayFloorId],
   )
+  const allowedZones = useMemo<Zone[]>(
+    () => collectAllowedZones(overlayProjects, selectedOverlayFloorId),
+    [overlayProjects, selectedOverlayFloorId],
+  )
 
-  const zonesRef = useRef<NoFlyZone[]>(noFlyZones)
+  const noFlyZonesRef = useRef<Zone[]>(noFlyZones)
+  const allowedZonesRef = useRef<Zone[]>(allowedZones)
   const dronesRef = useRef<DroneRegistry>(dronesById)
   const onBreachRef = useRef(onBreach)
-  const breachedRef = useRef<Set<string>>(new Set())
+  const breachedNoFlyRef = useRef<Set<string>>(new Set())
+  const outsideAllowedRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    zonesRef.current = noFlyZones
+    noFlyZonesRef.current = noFlyZones
   }, [noFlyZones])
+  useEffect(() => {
+    allowedZonesRef.current = allowedZones
+  }, [allowedZones])
   useEffect(() => {
     dronesRef.current = dronesById
   }, [dronesById])
@@ -58,10 +75,13 @@ export function useNoFlyZoneMonitor({
   const runCheckRef = useRef<ThrottledFunction<[]> | null>(null)
   useEffect(() => {
     const runCheck = throttle(() => {
-      const zones = zonesRef.current
-      const breached = breachedRef.current
-      if (zones.length === 0) {
-        breached.clear()
+      const noFly = noFlyZonesRef.current
+      const allowed = allowedZonesRef.current
+      const breachedNoFly = breachedNoFlyRef.current
+      const outsideAllowed = outsideAllowedRef.current
+      if (noFly.length === 0 && allowed.length === 0) {
+        breachedNoFly.clear()
+        outsideAllowed.clear()
         return
       }
 
@@ -71,17 +91,31 @@ export function useNoFlyZoneMonitor({
         }
 
         const point: [number, number] = [drone.lon, drone.lat]
-        const inside = isPointInNoFlyZones(point, zones)
 
-        if (inside && !breached.has(drone.id)) {
-          breached.add(drone.id)
+        // Exclusion rule: inside any no-fly zone.
+        const inNoFly = noFly.length > 0 && isPointInNoFlyZones(point, noFly)
+        if (inNoFly && !breachedNoFly.has(drone.id)) {
+          breachedNoFly.add(drone.id)
           onBreachRef.current({
             tone: 'error',
             title: 'CRITICAL WARNING',
             detail: `Drone ${drone.id} has breached a No-Fly Zone!`,
           })
-        } else if (!inside && breached.has(drone.id)) {
-          breached.delete(drone.id)
+        } else if (!inNoFly && breachedNoFly.has(drone.id)) {
+          breachedNoFly.delete(drone.id)
+        }
+
+        // Inclusion rule: outside every allowed zone (only when zones exist).
+        const outside = allowed.length > 0 && !isInsideAnyAllowedZone(point, allowed)
+        if (outside && !outsideAllowed.has(drone.id)) {
+          outsideAllowed.add(drone.id)
+          onBreachRef.current({
+            tone: 'error',
+            title: 'CRITICAL WARNING',
+            detail: `Drone ${drone.id} has left the allowed flight zone!`,
+          })
+        } else if (!outside && outsideAllowed.has(drone.id)) {
+          outsideAllowed.delete(drone.id)
         }
       }
     }, GEOFENCE_CHECK_INTERVAL_MS)
@@ -94,11 +128,12 @@ export function useNoFlyZoneMonitor({
   }, [])
 
   useEffect(() => {
-    // Early return: nothing to check when there are no active no-fly zones.
-    if (noFlyZones.length === 0) {
-      breachedRef.current.clear()
+    // Early return: nothing to check when there are no active zones at all.
+    if (noFlyZones.length === 0 && allowedZones.length === 0) {
+      breachedNoFlyRef.current.clear()
+      outsideAllowedRef.current.clear()
       return
     }
     runCheckRef.current?.()
-  }, [dronesById, noFlyZones])
+  }, [dronesById, noFlyZones, allowedZones])
 }

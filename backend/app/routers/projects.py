@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 
@@ -13,14 +12,14 @@ from ..dependencies import (
 )
 from ..schemas.project import (
     CreateChildProjectRequest,
-    CreateNoFlyZoneRequest,
     CreateProjectFromGeometryRequest,
     CreateProjectFromOsmRequest,
+    CreateZoneRequest,
     ImportGeoJsonProjectRequest,
     OsmType,
     SetFloorsEnabledRequest,
 )
-from ..services import geometry_service
+from ..services import geometry_service, zone_service
 from ..services.project_service import area_warnings, build_project_payload
 
 router = APIRouter()
@@ -76,7 +75,8 @@ async def create_spatial_project_from_geometry(payload: CreateProjectFromGeometr
     return {"projectId": stored_project["id"], "project": stored_project}
 
 
-def _no_fly_zone_polygon_points(geometry: dict) -> list[list[float]]:
+def _validate_zone_polygon(geometry: dict) -> None:
+    """Validate the simple Polygon the UI draws for a zone (>= 3 distinct points)."""
     if not isinstance(geometry, dict) or geometry.get("type") != "Polygon":
         raise HTTPException(status_code=422, detail="geometry must be a GeoJSON Polygon")
     rings = geometry.get("coordinates") or []
@@ -86,78 +86,91 @@ def _no_fly_zone_polygon_points(geometry: dict) -> list[list[float]]:
         for p in outer
         if isinstance(p, (list, tuple)) and len(p) >= 2
     ]
-    # Drop a duplicate closing point for the centroid math.
     if len(points) >= 2 and points[0] == points[-1]:
         points = points[:-1]
     if len(points) < 3:
         raise HTTPException(status_code=422, detail="Polygon needs at least 3 points")
-    return points
 
 
-def _inflated_boundary(points: list[list[float]]) -> dict:
-    # The project boundary must strictly contain the zone feature. Inflate the
-    # polygon outward from its centroid by a small factor so the boundary keeps
-    # the same shape (just slightly larger) and every feature vertex sits inside.
-    cx = sum(p[0] for p in points) / len(points)
-    cy = sum(p[1] for p in points) / len(points)
-    ring = [[cx + (p[0] - cx) * 1.02, cy + (p[1] - cy) * 1.02] for p in points]
-    ring.append(ring[0])
-    return geometry_service.normalize_to_multipolygon_geometry(
-        {"type": "Polygon", "coordinates": [ring]}
+async def _collapse_other_zones(new_project: dict) -> None:
+    """Clip every other overlapping zone with the just-saved newest zone."""
+    feature = zone_service.zone_feature_of(new_project)
+    if feature is None or not isinstance(feature.get("geometry"), dict):
+        return
+    all_projects = await project_service.list_projects()
+    modified, deleted_ids = zone_service.collapse_overlapping_zones(
+        feature["geometry"], new_project["id"], all_projects
     )
+    for project in modified:
+        await project_service.save_project(project, touch=False)
+        await project_service.publish_project(project["id"])
+    for project_id in deleted_ids:
+        await project_service.delete_project(project_id)
 
 
-def _apply_no_fly_zone_geometry(project: dict, name: str, geometry: dict) -> None:
-    points = _no_fly_zone_polygon_points(geometry)
-    project["name"] = name
-    project["kind"] = "no_fly_zone"
-    project["baseGeometry"] = _inflated_boundary(points)
-    stats = geometry_service.geometry_stats(project["baseGeometry"])
-    project["bbox"] = stats["bbox"]
-    project["areaSquareKm"] = stats["areaSquareKm"]
-    project["areaM2"] = stats["areaM2"]
-    project["perimeterM"] = stats["perimeterM"]
-    # Render/enforce the zone at every overlay zoom, not just close-up.
-    project["boundaryMinZoom"] = 1
-    project["detailMinZoom"] = 1
-    project["features"] = []
-    feature = {
-        "type": "Feature",
-        "id": str(uuid4()),
-        "floorId": None,
-        "geometry": geometry,
-        "properties": {"featureType": "no_fly_zone", "name": name, "floorId": None},
-    }
-    feature_service.upsert_feature(project, feature)
-
-
-@router.post("/api/no-fly-zones")
-async def create_no_fly_zone(payload: CreateNoFlyZoneRequest):
-    name = (payload.name or "No-Fly Zone").strip() or "No-Fly Zone"
+async def _create_zone(
+    name: str | None, geometry: dict, feature_type: str, default_name: str
+) -> dict:
+    _validate_zone_polygon(geometry)
+    resolved_name = (name or default_name).strip() or default_name
     project = build_project_payload(
-        name=name,
+        name=resolved_name,
         source="manual",
-        geometry=geometry_service.normalize_to_multipolygon_geometry(payload.geometry),
+        geometry=geometry_service.normalize_to_multipolygon_geometry(geometry),
         osm_type=None,
         osm_id=None,
         osm_tags={},
     )
     async with project_lock:
-        _apply_no_fly_zone_geometry(project, name, payload.geometry)
+        zone_service.apply_zone_geometry(project, resolved_name, geometry, feature_type)
         await project_service.save_project(project, touch=False)
+        # Save the new zone first so it owns an id and is skipped while it clips
+        # every overlapping older zone (newest wins).
+        await _collapse_other_zones(project)
         published = await project_service.publish_project(project["id"])
     return {"projectId": published["id"], "project": published}
+
+
+async def _update_zone(
+    project_id: str, name: str | None, geometry: dict, feature_type: str, default_name: str
+) -> dict:
+    _validate_zone_polygon(geometry)
+    async with project_lock:
+        project = await project_service.get_project_or_404(project_id)
+        resolved_name = (name or project.get("name") or default_name).strip() or default_name
+        zone_service.apply_zone_geometry(project, resolved_name, geometry, feature_type)
+        await project_service.save_project(project, touch=False)
+        await _collapse_other_zones(project)
+        published = await project_service.publish_project(project["id"])
+    return {"projectId": published["id"], "project": published}
+
+
+@router.post("/api/no-fly-zones")
+async def create_no_fly_zone(payload: CreateZoneRequest):
+    return await _create_zone(
+        payload.name, payload.geometry, zone_service.NO_FLY_ZONE_FEATURE_TYPE, "No-Fly Zone"
+    )
 
 
 @router.put("/api/no-fly-zones/{project_id}")
-async def update_no_fly_zone(project_id: str, payload: CreateNoFlyZoneRequest):
-    async with project_lock:
-        project = await project_service.get_project_or_404(project_id)
-        name = (payload.name or project.get("name") or "No-Fly Zone").strip() or "No-Fly Zone"
-        _apply_no_fly_zone_geometry(project, name, payload.geometry)
-        await project_service.save_project(project, touch=False)
-        published = await project_service.publish_project(project["id"])
-    return {"projectId": published["id"], "project": published}
+async def update_no_fly_zone(project_id: str, payload: CreateZoneRequest):
+    return await _update_zone(
+        project_id, payload.name, payload.geometry, zone_service.NO_FLY_ZONE_FEATURE_TYPE, "No-Fly Zone"
+    )
+
+
+@router.post("/api/allowed-zones")
+async def create_allowed_zone(payload: CreateZoneRequest):
+    return await _create_zone(
+        payload.name, payload.geometry, zone_service.ALLOWED_ZONE_FEATURE_TYPE, "Allowed Zone"
+    )
+
+
+@router.put("/api/allowed-zones/{project_id}")
+async def update_allowed_zone(project_id: str, payload: CreateZoneRequest):
+    return await _update_zone(
+        project_id, payload.name, payload.geometry, zone_service.ALLOWED_ZONE_FEATURE_TYPE, "Allowed Zone"
+    )
 
 
 @router.post("/api/spatial-projects/import-geojson")

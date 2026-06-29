@@ -38,3 +38,27 @@ export function isPointInPolygon(
 
   return inside
 }
+
+/**
+ * Point-in-polygon test that respects interior holes (a "donut").
+ *
+ * @param point  The coordinate to test, as `[lon, lat]`.
+ * @param outer  The outer ring as `[lon, lat]` vertices.
+ * @param holes  Interior rings carved out of the polygon (default none).
+ * @returns `true` when the point is inside the outer ring and not inside any
+ *          hole — mirrors the backend `point_in_multipolygon` semantics.
+ *
+ * Collapsed geofence zones can become donuts (e.g. a no-fly zone with an allowed
+ * zone punched out of it); without hole awareness a drone parked in the carved
+ * out region would falsely register as inside the zone.
+ */
+export function isPointInPolygonWithHoles(
+  point: [number, number],
+  outer: [number, number][],
+  holes: [number, number][][] = [],
+): boolean {
+  if (!isPointInPolygon(point, outer)) {
+    return false
+  }
+  return !holes.some((hole) => isPointInPolygon(point, hole))
+}
